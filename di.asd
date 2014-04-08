@@ -4,6 +4,6 @@
   :version "0.1"
   :serial t
   :description "Dependency Injection Container for Common Lisp"
-  :depends-on (:alexandria :iterate)
+  :depends-on (:alexandria :iterate :closer-mop)
   :components ((:file "package")
                (:file "di")))

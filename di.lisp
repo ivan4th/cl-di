@@ -92,9 +92,10 @@
               ;; set allow-auto-p to nil so we only get non-null value
               ;; when explicit binding exists for the class-name
               (obtain (injector binding) (class-name binding) nil))
-            (apply #'make-instance (class-name binding)
-                   :injector (injector binding)
-                   merged-initargs)))))
+            (make-instance-for-injector
+             (injector binding)
+             (class-name binding)
+             merged-initargs)))))
 
 (defclass value-binding (injector-binding)
   ((value :reader value :initarg :value)))
@@ -253,14 +254,38 @@
 
 (defvar *current-injector* nil) ;; TBD: perhaps wrap slime repl so that *current-injector* is set there
 
+(defun make-instance-for-injector (injector class-spec initargs)
+  ;; skip :injector initarg for non-injected classes
+  (if (subtypep class-spec 'injected)
+      (apply #'make-instance class-spec :injector injector initargs)
+      (apply #'make-instance class-spec initargs)))
+
 (defun inject (key)
   (obtain (or *current-injector*
               (error "no current-injector (forgot to add INJECTED base class?)"))
           key))
 
+(defun inject-slot-initargs (injector instance slot-names)
+  (dolist (slotd (c2mop:class-slots (class-of instance)))
+    (let ((slot-name (c2mop:slot-definition-name slotd)))
+      (when (or (eq t slot-names)
+                (member slot-name slot-names))
+        (let ((targets (iter (for initarg in (c2mop:slot-definition-initargs slotd))
+                             (when-let ((injected-instance (obtain injector initarg nil)))
+                               (collect injected-instance)))))
+          (when (rest targets)
+            (warn "ambiguous initarg binding: class ~s slot ~s initargs ~s"
+                  (type-of instance)
+                  slot-name
+                  (c2mop:slot-definition-initargs slotd)))
+          (when targets
+            (setf (slot-value instance slot-name)
+                  (first targets))))))))
+
 (defmethod shared-initialize :around ((injected injected) (slot-names t)
                                       &key injector &allow-other-keys)
   (let ((*current-injector* injector))
+    (inject-slot-initargs injector injected slot-names)
     (call-next-method)))
 
 (defun %provider-and-scope (base-instance key &optional (allow-auto-p t))
@@ -273,8 +298,8 @@
           ((and key (symbolp key)
                 (typep (find-class key nil) 'standard-class))
            (values
-            #'(lambda (&rest initargs) ;; TBD: &rest initargs
-                (apply #'make-instance key :injector injector initargs))
+            #'(lambda (&rest initargs)
+                (make-instance-for-injector injector key initargs))
             :no-scope))
           (t
            (error "no binding or class found for injection key ~s" key)))))

@@ -14,6 +14,8 @@
 (defclass injected-foobar (injected)
   ((misc-foo :accessor misc-foo :initarg :misc-foo)))
 
+(defclass some-barfoo () ())
+
 (defun make-sample-injector ()
   (make-injector
    #'(lambda (injector)
@@ -29,6 +31,13 @@
     (is (eq (another obj) (obtain obj 'another)))
     ;; different binding key
     (is (not (eq (another obj) (obtain injector 'injected-foobar))))))
+
+(deftest test-initarg-injection () ()
+  (let* ((injector (make-injector
+                    #'(lambda (injector)
+                        (bind-class injector :misc-foo 'some-barfoo)))))
+    (is-true (typep (misc-foo (obtain injector 'injected-foobar))
+                    'some-barfoo))))
 
 (defun/injected some-injected-func (abc def &inject (sobj some-injected)
                                         &key (foobar (:inject another)))
@@ -133,7 +142,7 @@
     (is (= 42 (funcall (provider injector 'some-injected))))
     (is (string= "qqq" (funcall (provider injector 'another))))))
 
-(deftest test-initarg-injection () ()
+(deftest test-binding-initargs () ()
   (let* ((injector (make-injector
                     #'(lambda (injector)
                         (bind-class injector
@@ -194,10 +203,6 @@
     (is (equal (list (obtain injector 'another) 42)
                (funcall (provider injector 'whatever))))))
 
-;; TBD: should support not just initform, but _initarg_ injection
-;; (use initarg names as injection keys; warn on ambiguous initarg bindings)
-;; TBD: test-initarg-injection should be test-binding-initargs
-;; TBD: test initargs spec for binding without scope spec
 ;; TBD: bind-factory and bind-factory* to specify function
 ;; TBD: declarative config
 ;; TBD: empty multibindings (bind-class* or bind-value* without second argument)
