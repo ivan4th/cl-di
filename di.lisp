@@ -3,11 +3,12 @@
 (defgeneric configure (injector module))
 
 (defclass injector ()
-  ((bindings :accessor bindings :initform (make-hash-table :test #'equal))
-   (instances :accessor instances :initform (make-hash-table :test #'equal)))
+  ((bindings :reader bindings :initform (make-hash-table :test #'equal)))
   (:documentation "The Injector"))
 
 (defmethod initialize-instance :after ((injector injector) &key config &allow-other-keys)
+  (bind-value injector '(:scope :no-scope) (make-instance 'null-scope))
+  (bind-value injector '(:scope :singleton) (make-instance 'singleton-scope))
   (dolist (item (flatten (ensure-list config)))
     (configure injector item)))
 
@@ -24,6 +25,27 @@
 (defmethod configure ((injector injector) (module module))
   (values))
 
+;;; scope
+
+(defgeneric scope-get (scope key provider))
+
+(defclass null-scope () ())
+
+(defmethod scope-get ((scope null-scope) key provider)
+  (declare (ignore key))
+  (funcall provider))
+
+(defclass singleton-scope ()
+  ((instances :reader instances :initform (make-hash-table :test #'equal))))
+
+(defmethod scope-get ((scope singleton-scope) key provider)
+  (or (gethash key (instances scope))
+      (when provider
+        (setf (gethash key (instances scope))
+              (funcall provider)))))
+
+;; TBD: thread-local scope
+
 ;;; binding
 
 (defgeneric binding-provider (binding))
@@ -32,14 +54,17 @@
   (:method ((binding t) (child-binding t))
     (error "can't multibind a single binding")))
 
+(defgeneric binding-scope (binding))
+
 (defclass injector-binding ()
-  ((injector :accessor injector :initarg :injector
-             :initform (error "must specify the injector"))))
+  ((injector :reader injector :initarg :injector
+             :initform (error "must specify the injector"))
+   (scope :reader binding-scope :initarg :scope :initform :no-scope)))
 
 (defclass class-binding (injector-binding)
-  ((class-name :accessor class-name :initarg :class-name)
-   (initargs :accessor initargs :initarg :initargs)
-   (recursive-p :accessor recursive-p :initarg :recursive-p
+  ((class-name :reader class-name :initarg :class-name)
+   (initargs :reader initargs :initarg :initargs)
+   (recursive-p :reader recursive-p :initarg :recursive-p
                 :initform t)))
 
 (defun inject-initargs (injector initargs)
@@ -72,7 +97,7 @@
                    merged-initargs)))))
 
 (defclass value-binding (injector-binding)
-  ((value :accessor value :initarg :value)))
+  ((value :reader value :initarg :value)))
 
 (defmethod binding-provider ((binding value-binding))
   #'(lambda () (value binding)))
@@ -88,23 +113,25 @@
   (push child-binding (child-bindings binding)))
 
 (defun bind-class (injector &rest bindings)
+  (when (= (length bindings) 3)
+    (setf bindings (list (first bindings) (list (third bindings) (second bindings)))))
   (doplist (key provider bindings)
-    (assert (and key (symbolp key)) ()
-            (error "invalid injection key ~s" key))
-    (setf provider (ensure-list provider))
-    ;; TBD: make sure the injector wasn't configured yet
-    (setf (gethash key (bindings injector))
-          (make-instance 'class-binding
-                         :injector injector
-                         :class-name (first provider)
-                         :initargs (rest provider)
-                         ;; avoid endless recursion
-                         :recursive-p (not (eq key (first provider)))))))
+    (let ((scope :no-scope))
+      (setf provider (ensure-list provider))
+      (when (keywordp (first provider))
+        (setf scope (pop provider)))
+      ;; TBD: make sure the injector wasn't configured yet
+      (setf (gethash key (bindings injector))
+            (make-instance 'class-binding
+                           :injector injector
+                           :class-name (first provider)
+                           :initargs (rest provider)
+                           ;; avoid endless recursion
+                           :recursive-p (not (eq key (first provider)))
+                           :scope scope)))))
 
 (defun bind-value (injector &rest bindings)
   (doplist (key value bindings)
-    (assert (and key (symbolp key)) ()
-            (error "invalid injection key ~s" key))
     (setf (gethash key (bindings injector))
           (make-instance 'value-binding
                          :injector injector
@@ -118,8 +145,6 @@
 
 (defun bind-value* (injector &rest bindings)
   (doplist (key value bindings)
-    (assert (and key (symbolp key)) ()
-            (error "invalid injection key ~s" key))
     (binding-add-child
      (ensure-multibinding injector key)
      (make-instance 'value-binding
@@ -128,8 +153,6 @@
 
 (defun bind-class* (injector &rest bindings)
   (doplist (key provider bindings)
-    (assert (and key (symbolp key)) ()
-            (error "invalid injection key ~s" key))
     (setf provider (ensure-list provider))
     (binding-add-child
      (ensure-multibinding injector key)
@@ -249,22 +272,29 @@
   (let ((*current-injector* injector))
     (call-next-method)))
 
-(defun provider (base-instance key &optional (allow-auto-p t))
+(defun %provider-and-scope (base-instance key &optional (allow-auto-p t))
   (let* ((injector (injector base-instance))
          (binding (gethash key (bindings injector))))
     (cond (binding
-           (binding-provider binding))
-          ((not allow-auto-p) nil)
+           (values (binding-provider binding)
+                   (binding-scope binding)))
+          ((not allow-auto-p) (values nil nil))
           ((and key (symbolp key)
                 (typep (find-class key nil) 'standard-class))
-           #'(lambda (&rest initargs) ;; TBD: &rest initargs
-               (apply #'make-instance key :injector injector initargs)))
+           (values
+            #'(lambda (&rest initargs) ;; TBD: &rest initargs
+                (apply #'make-instance key :injector injector initargs))
+            :no-scope))
           (t
            (error "no binding or class found for injection key ~s" key)))))
 
+(defun provider (base-instance key &optional (allow-auto-p t))
+  (values (%provider-and-scope base-instance key allow-auto-p)))
+
 (defun obtain (base-instance key &optional (allow-auto-p t))
   (let ((injector (injector base-instance)))
-    (or (gethash key (instances injector))
-        (when-let ((provider (provider injector key allow-auto-p)))
-          (setf (gethash key (instances injector))
-                (funcall provider))))))
+    (multiple-value-bind (provider scope)
+        (%provider-and-scope injector key allow-auto-p)
+      (when provider
+        (let ((scope-provider (provider injector (list :scope scope))))
+          (scope-get (funcall scope-provider) key provider))))))

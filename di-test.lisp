@@ -17,7 +17,8 @@
 (defun make-sample-injector ()
   (make-injector
    #'(lambda (injector)
-       (bind-class injector 'another 'injected-foobar))))
+       (bind-class injector 'some-injected 'some-injected :singleton)
+       (bind-class injector 'another 'injected-foobar :singleton))))
 
 (deftest test-initform-injection () ()
   (let* ((injector (make-sample-injector))
@@ -139,14 +140,14 @@
   (let* ((injector (make-injector
                     #'(lambda (injector)
                         (bind-class injector
-                                    'some '(some-injected
+                                    'some '(:no-scope some-injected
                                             :whatever 42
                                             :whatever-misc "qqq"
                                             :whatever-etc (:instance injected-foobar
                                                            :misc-foo (:value xxx))
                                             :whatever-foo (:value another)
                                             :whatever-bar (:inject another))
-                                    'another 'injected-foobar))))
+                                    'another '(:singleton injected-foobar)))))
          (obj (obtain injector 'some))
          (another (obtain injector 'another)))
     (is-true (typep obj 'some-injected))
@@ -163,7 +164,7 @@
 (deftest test-recursive-bindings () ()
   (let* ((injector (make-injector
                     #'(lambda (injector)
-                        (bind-class injector 'another 'injected-foobar)
+                        (bind-class injector 'another 'injected-foobar :singleton)
                         (bind-class injector 'whatever 'another))))
          (another (obtain injector 'another))
          (whatever (obtain injector 'whatever)))
@@ -190,16 +191,17 @@
 (deftest test-multibinding-provider () ()
   (let ((injector (make-injector
                    #'(lambda (injector)
-                       (bind-class injector 'another 'injected-foobar)
+                       (bind-class injector 'another 'injected-foobar :singleton)
                        (bind-class* injector 'whatever 'another)
                        (bind-value* injector 'whatever 42)))))
     (is (equal (list (obtain injector 'another) 42)
                (funcall (provider injector 'whatever))))))
 
-;; TBD: scope: default to 'no scope', also support 'singleton scope' (for now)
+;; TBD: test initarg injection without scope spec
 ;; TBD: bind-factory and bind-factory* to specify function
 ;; TBD: declarative config
 ;; TBD: empty multibindings (bind-class* or bind-value* without second argument)
 ;; (note: these should do nothing if the multibinding already exists)
 ;; TBD: &inject shouldn't be exported (symbol with such name from any package should do)
 ;; TBD: injection defaults for initforms / initargs / keyword arguments (for cases when there's no injector)
+;; TBD: thread-local scope & scope extensibility
