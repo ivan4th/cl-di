@@ -194,6 +194,14 @@
     (is (equal '(some-injected injected-foobar)
                (mapcar #'type-of (obtain injector 'whatever))))))
 
+(deftest test-class-multibindings-scope () ()
+  (let* ((injector (make-injector
+                    #'(lambda (injector)
+                        (bind-value* injector 'foo 42 :singleton)
+                        (bind-class* injector 'foo 'injected-foobar))))
+         (foo (obtain injector 'foo)))
+    (is (eq foo (obtain injector 'foo)))))
+
 (deftest test-multibinding-provider () ()
   (let ((injector (make-injector
                    #'(lambda (injector)
@@ -209,18 +217,23 @@
                        (bind-factory injector 'foo #'(lambda () (list 42)))
                        (bind-factory injector 'bar #'(lambda () (list "abc")) :singleton)
                        (bind-factory* injector 'foobar #'(lambda () 'q))
-                       (bind-factory* injector 'foobar #'(lambda () 'r)))))
+                       (bind-factory* injector 'foobar #'(lambda () 'r))
+                       (bind-factory* injector 'baz #'(lambda () 'qq) :singleton)
+                       (bind-factory* injector 'baz #'(lambda () 'rr)))))
          (foo (obtain injector 'foo))
          (bar (obtain injector 'bar))
-         (foobar (obtain injector 'foobar)))
+         (foobar (obtain injector 'foobar))
+         (baz (obtain injector 'baz)))
     (is (equal (list 42) foo))
     (is (equal foo (obtain injector 'foo)))
     (is (not (eq foo (obtain injector 'foo))))
     (is (equal '("abc") bar))
     (is (eq bar (obtain injector 'bar)))
-    (is (equal '(q r) foobar))))
+    (is (not (eq foobar (obtain injector 'foobar))))
+    (is (equal '(q r) foobar))
+    (is (eq baz (obtain injector 'baz)))
+    (is (equal '(qq rr) (obtain injector 'baz)))))
 
-;; TBD: scope arg for bind-class* / bind-factory*
 ;; TBD: empty multibindings (bind-class* or bind-value* without second argument)
 ;; (note: these should do nothing if the multibinding already exists)
 ;; TBD: declarative config

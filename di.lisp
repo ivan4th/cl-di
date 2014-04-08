@@ -154,31 +154,32 @@
                        :factory factory
                        :scope scope)))
 
-(defun ensure-multibinding (injector key)
+(defun ensure-multibinding (injector key scope)
   (or (gethash key (bindings injector))
       (setf (gethash key (bindings injector))
             (make-instance 'multibinding
-                           :injector injector))))
+                           :injector injector
+                           :scope scope))))
 
-(defun bind-class* (injector key provider)
+(defun bind-class* (injector key provider &optional (scope :no-scope))
   (setf provider (ensure-list provider))
   (binding-add-child
-   (ensure-multibinding injector key)
+   (ensure-multibinding injector key scope)
    (make-instance 'class-binding
                   :injector injector
                   :class-name (first provider)
                   :initargs (rest provider))))
 
-(defun bind-value* (injector key value)
+(defun bind-value* (injector key value &optional (scope :no-scope))
   (binding-add-child
-   (ensure-multibinding injector key)
+   (ensure-multibinding injector key scope)
    (make-instance 'value-binding
                   :injector injector
                   :value value)))
 
-(defun bind-factory* (injector key factory)
+(defun bind-factory* (injector key factory &optional (scope :no-scope))
   (binding-add-child
-   (ensure-multibinding injector key)
+   (ensure-multibinding injector key scope)
    (make-instance 'factory-binding
                   :injector injector
                   :factory factory)))
