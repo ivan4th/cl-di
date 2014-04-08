@@ -202,6 +202,25 @@
          (foo (obtain injector 'foo)))
     (is (eq foo (obtain injector 'foo)))))
 
+(deftest test-empty-multibindings () ()
+  (let* ((injector (make-injector
+                    #'(lambda (injector)
+                        (bind-empty* injector 'foo)
+                        (bind-empty* injector 'bar)
+                        (bind-empty* injector 'baz :singleton)
+                        (bind-class* injector 'bar 'injected-foobar)
+                        (bind-class* injector 'baz 'injected-foobar)
+                        ;; note: this does nothing
+                        (bind-empty* injector 'baz))))
+         (foo (obtain injector 'foo))
+         (bar (obtain injector 'bar))
+         (baz (obtain injector 'baz)))
+    (is (null foo))
+    (is (not (eq bar (obtain injector 'bar))))
+    (is (typep bar '(cons injected-foobar null)))
+    (is (eq baz (obtain injector 'baz)))
+    (is (typep baz '(cons injected-foobar null)))))
+
 (deftest test-multibinding-provider () ()
   (let ((injector (make-injector
                    #'(lambda (injector)
@@ -234,8 +253,6 @@
     (is (eq baz (obtain injector 'baz)))
     (is (equal '(qq rr) (obtain injector 'baz)))))
 
-;; TBD: empty multibindings (bind-class* or bind-value* without second argument)
-;; (note: these should do nothing if the multibinding already exists)
 ;; TBD: declarative config
 ;; TBD: injection defaults for initforms / initargs / keyword arguments (for cases when there's no injector)
 ;; TBD: thread-local scope & scope extensibility

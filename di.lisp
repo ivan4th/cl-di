@@ -161,10 +161,13 @@
                            :injector injector
                            :scope scope))))
 
+(defun bind-empty* (injector key &optional (scope :no-scope))
+  (ensure-multibinding injector key scope))
+
 (defun bind-class* (injector key provider &optional (scope :no-scope))
   (setf provider (ensure-list provider))
   (binding-add-child
-   (ensure-multibinding injector key scope)
+    (ensure-multibinding injector key scope)
    (make-instance 'class-binding
                   :injector injector
                   :class-name (first provider)

@@ -13,6 +13,7 @@
            #:bind-value*
            #:bind-factory
            #:bind-factory*
+           #:bind-empty*
            #:module
            #:defun/injected
            #:defmethod/injected
