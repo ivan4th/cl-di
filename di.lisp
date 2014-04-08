@@ -46,7 +46,7 @@
 
 ;; TBD: thread-local scope
 
-;;; binding
+;;; bindings
 
 (defgeneric binding-provider (binding))
 
@@ -60,6 +60,8 @@
   ((injector :reader injector :initarg :injector
              :initform (error "must specify the injector"))
    (scope :reader binding-scope :initarg :scope :initform :no-scope)))
+
+;;; class-binding
 
 (defclass class-binding (injector-binding)
   ((class-name :reader class-name :initarg :class-name)
@@ -97,11 +99,23 @@
              (class-name binding)
              merged-initargs)))))
 
+;;; value-binding
+
 (defclass value-binding (injector-binding)
   ((value :reader value :initarg :value)))
 
 (defmethod binding-provider ((binding value-binding))
   #'(lambda () (value binding)))
+
+;;; factory-binding
+
+(defclass factory-binding (injector-binding)
+  ((factory :reader factory :initarg :factory)))
+
+(defmethod binding-provider ((binding factory-binding))
+  #'(lambda () (funcall (factory binding))))
+
+;;; multibinding
 
 (defclass multibinding (injector-binding)
   ((child-bindings :accessor child-bindings :initform '())))
@@ -112,6 +126,8 @@
 
 (defmethod binding-add-child ((binding multibinding) child-binding)
   (push child-binding (child-bindings binding)))
+
+;;; binding setup functions
 
 (defun bind-class (injector key provider &optional (scope :no-scope))
   ;; TBD: make sure the injector wasn't configured yet
@@ -131,18 +147,18 @@
                        :injector injector
                        :value value)))
 
+(defun bind-factory (injector key factory &optional (scope :no-scope))
+  (setf (gethash key (bindings injector))
+        (make-instance 'factory-binding
+                       :injector injector
+                       :factory factory
+                       :scope scope)))
+
 (defun ensure-multibinding (injector key)
   (or (gethash key (bindings injector))
       (setf (gethash key (bindings injector))
             (make-instance 'multibinding
                            :injector injector))))
-
-(defun bind-value* (injector key value)
-  (binding-add-child
-   (ensure-multibinding injector key)
-   (make-instance 'value-binding
-                  :injector injector
-                  :value value)))
 
 (defun bind-class* (injector key provider)
   (setf provider (ensure-list provider))
@@ -152,6 +168,20 @@
                   :injector injector
                   :class-name (first provider)
                   :initargs (rest provider))))
+
+(defun bind-value* (injector key value)
+  (binding-add-child
+   (ensure-multibinding injector key)
+   (make-instance 'value-binding
+                  :injector injector
+                  :value value)))
+
+(defun bind-factory* (injector key factory)
+  (binding-add-child
+   (ensure-multibinding injector key)
+   (make-instance 'factory-binding
+                  :injector injector
+                  :factory factory)))
 
 (defun make-injector (&rest configs)
   (make-instance 'injector :config configs))

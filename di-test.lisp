@@ -203,7 +203,24 @@
     (is (equal (list (obtain injector 'another) 42)
                (funcall (provider injector 'whatever))))))
 
-;; TBD: bind-factory and bind-factory* to specify function
+(deftest test-factory-bindings () ()
+  (let* ((injector (make-injector
+                   #'(lambda (injector)
+                       (bind-factory injector 'foo #'(lambda () (list 42)))
+                       (bind-factory injector 'bar #'(lambda () (list "abc")) :singleton)
+                       (bind-factory* injector 'foobar #'(lambda () 'q))
+                       (bind-factory* injector 'foobar #'(lambda () 'r)))))
+         (foo (obtain injector 'foo))
+         (bar (obtain injector 'bar))
+         (foobar (obtain injector 'foobar)))
+    (is (equal (list 42) foo))
+    (is (equal foo (obtain injector 'foo)))
+    (is (not (eq foo (obtain injector 'foo))))
+    (is (equal '("abc") bar))
+    (is (eq bar (obtain injector 'bar)))
+    (is (equal '(q r) foobar))))
+
+;; TBD: scope arg for bind-class* / bind-factory*
 ;; TBD: empty multibindings (bind-class* or bind-value* without second argument)
 ;; (note: these should do nothing if the multibinding already exists)
 ;; TBD: declarative config

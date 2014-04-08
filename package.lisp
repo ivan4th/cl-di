@@ -11,6 +11,8 @@
            #:bind-class*
            #:bind-value
            #:bind-value*
+           #:bind-factory
+           #:bind-factory*
            #:module
            #:defun/injected
            #:defmethod/injected
