@@ -156,7 +156,14 @@
 (defun make-injector (&rest configs)
   (make-instance 'injector :config configs))
 
+(defun normalize-lambda-list-item (item)
+  (cond ((not (symbolp item)) item)
+        ((string= (string-upcase item) "&INJECT") '&inject)
+        ((string= (string-upcase item) "&PROVIDE") '&provide)
+        (t item)))
+
 (defun split-injected-lambda-list (lambda-list)
+  (setf lambda-list (mapcar #'normalize-lambda-list-item lambda-list))
   (let ((state :plain))
     (assert (<= (count '&inject lambda-list) 1) () "duplicate &inject")
     (assert (<= (count '&provide lambda-list) 1) () "duplicate &provide")

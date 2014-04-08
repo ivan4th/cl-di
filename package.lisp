@@ -6,8 +6,6 @@
            #:injector
            #:inject
            #:injected
-           #:&inject
-           #:&provide
            #:configure
            #:bind-class
            #:bind-class*

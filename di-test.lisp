@@ -204,9 +204,8 @@
                (funcall (provider injector 'whatever))))))
 
 ;; TBD: bind-factory and bind-factory* to specify function
-;; TBD: declarative config
 ;; TBD: empty multibindings (bind-class* or bind-value* without second argument)
 ;; (note: these should do nothing if the multibinding already exists)
-;; TBD: &inject shouldn't be exported (symbol with such name from any package should do)
+;; TBD: declarative config
 ;; TBD: injection defaults for initforms / initargs / keyword arguments (for cases when there's no injector)
 ;; TBD: thread-local scope & scope extensibility
