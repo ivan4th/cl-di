@@ -79,9 +79,8 @@
 (deftest test-provider-bindings () ()
   (let* ((injector (make-injector
                     #'(lambda (injector)
-                        (bind-class injector
-                                       'some 'some-injected
-                                       'another 'injected-foobar))))
+                        (bind-class injector 'some 'some-injected)
+                        (bind-class injector 'another 'injected-foobar))))
          (provide-some (provider injector 'some))
          (provide-some-injected (provider injector 'some-injected))
          (obj (funcall provide-some)))
@@ -98,9 +97,8 @@
 (deftest test-func-provider-bindings () ()
   (let* ((injector (make-injector
                     #'(lambda (injector)
-                        (bind-class injector
-                                       'some 'some-injected
-                                       'another 'injected-foobar))))
+                        (bind-class injector 'some 'some-injected)
+                        (bind-class injector'another 'injected-foobar))))
          (l (func-with-providers 1 2 :injector injector)))
     (is (= 1 (first l)))
     (is (= 2 (second l)))
@@ -115,9 +113,8 @@
 (deftest test-method-provider-bindings () ()
   (let* ((injector (make-injector
                     #'(lambda (injector)
-                        (bind-class injector
-                                       'some 'some-injected
-                                       'another 'injected-foobar))))
+                        (bind-class injector 'some 'some-injected)
+                        (bind-class injector 'another 'injected-foobar))))
          (l (some-gf 'a 'b :injector injector)))
     (is (eq 'a (first l)))
     (is (eq 'b (second l)))
@@ -140,14 +137,14 @@
   (let* ((injector (make-injector
                     #'(lambda (injector)
                         (bind-class injector
-                                    'some '(:no-scope some-injected
+                                    'some '(some-injected
                                             :whatever 42
                                             :whatever-misc "qqq"
                                             :whatever-etc (:instance injected-foobar
                                                            :misc-foo (:value xxx))
                                             :whatever-foo (:value another)
-                                            :whatever-bar (:inject another))
-                                    'another '(:singleton injected-foobar)))))
+                                            :whatever-bar (:inject another)))
+                        (bind-class injector 'another 'injected-foobar :singleton))))
          (obj (obtain injector 'some))
          (another (obtain injector 'another)))
     (is-true (typep obj 'some-injected))
@@ -197,7 +194,10 @@
     (is (equal (list (obtain injector 'another) 42)
                (funcall (provider injector 'whatever))))))
 
-;; TBD: test initarg injection without scope spec
+;; TBD: should support not just initform, but _initarg_ injection
+;; (use initarg names as injection keys; warn on ambiguous initarg bindings)
+;; TBD: test-initarg-injection should be test-binding-initargs
+;; TBD: test initargs spec for binding without scope spec
 ;; TBD: bind-factory and bind-factory* to specify function
 ;; TBD: declarative config
 ;; TBD: empty multibindings (bind-class* or bind-value* without second argument)

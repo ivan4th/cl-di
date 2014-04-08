@@ -112,30 +112,23 @@
 (defmethod binding-add-child ((binding multibinding) child-binding)
   (push child-binding (child-bindings binding)))
 
-(defun bind-class (injector &rest bindings)
-  (when (= (length bindings) 3)
-    (setf bindings (list (first bindings) (list (third bindings) (second bindings)))))
-  (doplist (key provider bindings)
-    (let ((scope :no-scope))
-      (setf provider (ensure-list provider))
-      (when (keywordp (first provider))
-        (setf scope (pop provider)))
-      ;; TBD: make sure the injector wasn't configured yet
-      (setf (gethash key (bindings injector))
-            (make-instance 'class-binding
-                           :injector injector
-                           :class-name (first provider)
-                           :initargs (rest provider)
-                           ;; avoid endless recursion
-                           :recursive-p (not (eq key (first provider)))
-                           :scope scope)))))
+(defun bind-class (injector key provider &optional (scope :no-scope))
+  ;; TBD: make sure the injector wasn't configured yet
+  (setf provider (ensure-list provider))
+  (setf (gethash key (bindings injector))
+        (make-instance 'class-binding
+                       :injector injector
+                       :class-name (first provider)
+                       :initargs (rest provider)
+                       ;; avoid endless recursion
+                       :recursive-p (not (eq key (first provider)))
+                       :scope scope)))
 
-(defun bind-value (injector &rest bindings)
-  (doplist (key value bindings)
-    (setf (gethash key (bindings injector))
-          (make-instance 'value-binding
-                         :injector injector
-                         :value value))))
+(defun bind-value (injector key value)
+  (setf (gethash key (bindings injector))
+        (make-instance 'value-binding
+                       :injector injector
+                       :value value)))
 
 (defun ensure-multibinding (injector key)
   (or (gethash key (bindings injector))
@@ -143,23 +136,21 @@
             (make-instance 'multibinding
                            :injector injector))))
 
-(defun bind-value* (injector &rest bindings)
-  (doplist (key value bindings)
-    (binding-add-child
-     (ensure-multibinding injector key)
-     (make-instance 'value-binding
-                    :injector injector
-                    :value value))))
+(defun bind-value* (injector key value)
+  (binding-add-child
+   (ensure-multibinding injector key)
+   (make-instance 'value-binding
+                  :injector injector
+                  :value value)))
 
-(defun bind-class* (injector &rest bindings)
-  (doplist (key provider bindings)
-    (setf provider (ensure-list provider))
-    (binding-add-child
-     (ensure-multibinding injector key)
-     (make-instance 'class-binding
-                    :injector injector
-                    :class-name (first provider)
-                    :initargs (rest provider)))))
+(defun bind-class* (injector key provider)
+  (setf provider (ensure-list provider))
+  (binding-add-child
+   (ensure-multibinding injector key)
+   (make-instance 'class-binding
+                  :injector injector
+                  :class-name (first provider)
+                  :initargs (rest provider))))
 
 (defun make-injector (&rest configs)
   (make-instance 'injector :config configs))
