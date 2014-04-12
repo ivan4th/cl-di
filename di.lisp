@@ -355,3 +355,53 @@
       (when provider
         (let ((scope-provider (provider injector (list :scope scope))))
           (scope-get (funcall scope-provider) key provider))))))
+
+;;; defmodule
+
+(defun expand-provider-spec (provider-spec)
+  (assert (match provider-spec
+            ((or (type symbol)
+                 (guard (list* (type symbol) initargs)
+                        (and (proper-list-p initargs)
+                             (zerop (mod (length initargs) 2)))))
+             t))
+          ()
+          "invalid provider spec ~s" provider-spec)
+  (setf provider-spec (ensure-list provider-spec))
+  `(list ',(first provider-spec)
+         ,@(iter (for (name value . nil) on (rest provider-spec) by #'cddr)
+                 (collect name)
+                 (collect
+                     (match value
+                       ((list :inject v) `(quote (:inject ,v)))
+                       ((list :value v) `(list :value ,v))
+                       (v v))))))
+
+(defun expand-binding (injector-var binding-spec)
+  (or (match binding-spec
+        ((list := key value)
+         `(bind-value ,injector-var ',key ,value))
+        ((list (or :* :+) key)
+         `(bind-empty* ,injector-var ',key))
+        ((list :* key value)
+         `(bind-value* ,injector-var ',key ,value))
+        ((or (list :+ key provider-spec)
+             (list :+ key provider-spec scope))
+         `(bind-class* ,injector-var
+                       ',key
+                       ,(expand-provider-spec provider-spec)
+                       ,(or scope :no-scope)))
+        ((or (list key provider-spec)
+             (list key provider-spec scope))
+         `(bind-class ,injector-var
+                      ',key
+                      ,(expand-provider-spec provider-spec)
+                      ,(or scope :no-scope))))
+      (error "invalid binding spec: ~s" binding-spec)))
+
+(defmacro defmodule (name (&rest supers) &body bindings)
+  (with-gensyms (injector module)
+    `(progn
+       (defclass ,name ,(or supers '(module)) ())
+       (defmethod configure :after ((,injector injector) (,module ,name))
+         ,@(mapcar (curry #'expand-binding injector) bindings)))))

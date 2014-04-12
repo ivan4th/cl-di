@@ -1,7 +1,7 @@
 (in-package :common-lisp-user)
 
 (defpackage :di
-  (:use :cl :alexandria :iterate)
+  (:use :cl :alexandria :iterate :optima)
   (:export #:make-injector
            #:injector
            #:inject
@@ -18,4 +18,5 @@
            #:defun/injected
            #:defmethod/injected
            #:obtain
-           #:provider))
+           #:provider
+           #:defmodule))

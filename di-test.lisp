@@ -253,6 +253,53 @@
     (is (eq baz (obtain injector 'baz)))
     (is (equal '(qq rr) (obtain injector 'baz)))))
 
-;; TBD: declarative config
-;; TBD: injection defaults for initforms / initargs / keyword arguments (for cases when there's no injector)
-;; TBD: thread-local scope & scope extensibility
+(defmodule sample-decl-module ()
+  (another injected-foobar :singleton)
+  (some-injected
+   (some-injected
+    :whatever (:inject :misc-foo)
+    :whatever-misc 42
+    :whatever-foo (:value 'qqq))
+   :singleton)
+  (:misc-foo some-barfoo)
+  (:= :whatever-bar 4242)
+  (:= foo 42))
+
+(defmodule inherited-decl-module (sample-decl-module)
+  (:* bar)
+  (:* bar "abc")
+  (:+ baz another :singleton)
+  (:+ baz some-injected))
+
+(deftest test-defmodule () ()
+  (let ((injector (make-injector 'inherited-decl-module)))
+    (let ((another (obtain injector 'another))
+          (some-injected (obtain injector 'some-injected))
+          (bar (obtain injector 'bar))
+          (baz (obtain injector 'baz)))
+      (is (equal another (obtain injector 'another)))
+      (is-true (typep another 'injected-foobar))
+      (is (equal some-injected (obtain injector 'some-injected)))
+      (is-true (typep some-injected 'some-injected))
+      (is-true (typep (whatever some-injected) 'some-barfoo))
+      (is (= 42 (whatever-misc some-injected)))
+      (is (equal 'qqq (whatever-foo some-injected)))
+      (is-true (typep (misc-foo another) 'some-barfoo))
+      (is (not (eq (misc-foo another) (whatever some-injected)))) ; non-singleton binding
+      (is (= 4242 (whatever-bar some-injected)))
+      (is (= 42 (obtain injector 'foo)))
+      (is (equal '("abc") bar))
+      (is (equal '("abc") (obtain injector 'bar)))
+      (is (not (eq bar (obtain injector 'bar))))
+      (is (= 2 (length baz)))
+      (is-true (typep (first baz) 'injected-foobar))
+      (is-true (typep (second baz) 'some-injected))
+      (is (eq baz (obtain injector 'baz))))))
+
+;; TBD: factory bindings in module spec
+;; TBD: alist bindings (via bind-alist + in module spec)
+;; TBD: don't do initform injection, parse (c2mop:class-default-initargs class) instead
+;; (look for second values). (inject key [default]) should return default if it's present
+;; in case it's actually run, or throw an error if it's run and there's no default specified
+;; TBD: injection defaults for initargs (incl. :default-initargs) / keyword arguments (for cases when there's no injector)
+;; TBD: thread-local scope & scope extensibility (export symbols)
