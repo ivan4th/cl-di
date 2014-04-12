@@ -420,3 +420,8 @@
        (defclass ,name ,(or supers '(module)) ())
        (defmethod configure :after ((,injector injector) (,module ,name))
          ,@(mapcar (curry #'expand-binding injector) bindings)))))
+
+(defmacro declarative-bindings (&body bindings)
+  (with-gensyms (injector)
+    `#'(lambda (,injector)
+         ,@(mapcar (curry #'expand-binding injector) bindings))))

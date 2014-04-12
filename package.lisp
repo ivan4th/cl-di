@@ -19,4 +19,5 @@
            #:defmethod/injected
            #:obtain
            #:provider
-           #:defmodule))
+           #:defmodule
+           #:declarative-bindings))

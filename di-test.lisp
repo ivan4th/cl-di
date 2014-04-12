@@ -281,56 +281,86 @@
   (:!+ factory4 #'(lambda () (cons 9 10)) :singleton)
   (:!+ factory4 #'(lambda () (cons 11 12))))
 
+(defun verify-declarative-bindings (injector)
+  (let ((another (obtain injector 'another))
+        (some-injected (obtain injector 'some-injected))
+        (bar (obtain injector 'bar))
+        (baz (obtain injector 'baz))
+        (fac1 (obtain injector 'factory1))
+        (fac2 (obtain injector 'factory2))
+        (fac3 (obtain injector 'factory3))
+        (fac4 (obtain injector 'factory4)))
+    (is (equal another (obtain injector 'another)))
+    (is-true (typep another 'injected-foobar))
+
+    (is (equal some-injected (obtain injector 'some-injected)))
+    (is-true (typep some-injected 'some-injected))
+    (is-true (typep (whatever some-injected) 'some-barfoo))
+    (is (= 42 (whatever-misc some-injected)))
+    (is (equal 'qqq (whatever-foo some-injected)))
+
+    (is-true (typep (misc-foo another) 'some-barfoo))
+    (is (not (eq (misc-foo another) (whatever some-injected)))) ; non-singleton binding
+
+    (is (= 4242 (whatever-bar some-injected)))
+
+    (is (= 42 (obtain injector 'foo)))
+
+    (is (equal '("abc") bar))
+    (is (equal '("abc") (obtain injector 'bar)))
+    (is (not (eq bar (obtain injector 'bar))))
+
+    (is (= 2 (length baz)))
+    (is-true (typep (first baz) 'injected-foobar))
+    (is-true (typep (second baz) 'some-injected))
+    (is (eq baz (obtain injector 'baz)))
+
+    (is (equal '(1 . 2) fac1))
+    (is (equal '(1 . 2) (obtain injector 'factory1)))
+    (is (not (eq fac1 (obtain injector 'factory1))))
+
+    (is (equal '(3 . 4) fac2))
+    (is (eq fac2 (obtain injector 'factory2)))
+
+    (is (equal '((5 . 6) (7 . 8)) fac3))
+    (is (equal '((5 . 6) (7 . 8)) (obtain injector 'factory3)))
+    (is (not (eq fac3 (obtain injector 'factory3))))
+
+    (is (equal '((9 . 10) (11 . 12)) fac4))
+    (is (eq fac4 (obtain injector 'factory4)))))
+
 (deftest test-defmodule () ()
-  (let ((injector (make-injector 'inherited-decl-module)))
-    (let ((another (obtain injector 'another))
-          (some-injected (obtain injector 'some-injected))
-          (bar (obtain injector 'bar))
-          (baz (obtain injector 'baz))
-          (fac1 (obtain injector 'factory1))
-          (fac2 (obtain injector 'factory2))
-          (fac3 (obtain injector 'factory3))
-          (fac4 (obtain injector 'factory4)))
-      (is (equal another (obtain injector 'another)))
-      (is-true (typep another 'injected-foobar))
+  (verify-declarative-bindings (make-injector 'inherited-decl-module)))
 
-      (is (equal some-injected (obtain injector 'some-injected)))
-      (is-true (typep some-injected 'some-injected))
-      (is-true (typep (whatever some-injected) 'some-barfoo))
-      (is (= 42 (whatever-misc some-injected)))
-      (is (equal 'qqq (whatever-foo some-injected)))
+(deftest test-declarative-bindings () ()
+  (verify-declarative-bindings
+   (make-injector
+    (declarative-bindings
+     (another injected-foobar :singleton)
+     (some-injected
+      (some-injected
+       :whatever (:inject :misc-foo)
+       :whatever-misc 42
+       :whatever-foo (:value 'qqq))
+      :singleton)
+     (:misc-foo some-barfoo)
+     (:= :whatever-bar 4242)
+     (:= foo 42)
+     (:* bar)
+     (:* bar (:none))
+     (:* bar "abc")
+     (:+ baz (:none) :singleton)
+     (:+ baz another :singleton)
+     (:+ baz some-injected)
+     (:! factory1 #'(lambda () (cons 1 2)))
+     (:! factory2 #'(lambda () (cons 3 4)) :singleton)
+     (:!+ factory3)
+     (:!+ factory3 #'(lambda () (cons 5 6)))
+     (:!+ factory3 #'(lambda () (cons 7 8)))
+     (:!+ factory4 (:none) :singleton)
+     (:!+ factory4 #'(lambda () (cons 9 10)) :singleton)
+     (:!+ factory4 #'(lambda () (cons 11 12)))))))
 
-      (is-true (typep (misc-foo another) 'some-barfoo))
-      (is (not (eq (misc-foo another) (whatever some-injected)))) ; non-singleton binding
-
-      (is (= 4242 (whatever-bar some-injected)))
-
-      (is (= 42 (obtain injector 'foo)))
-
-      (is (equal '("abc") bar))
-      (is (equal '("abc") (obtain injector 'bar)))
-      (is (not (eq bar (obtain injector 'bar))))
-
-      (is (= 2 (length baz)))
-      (is-true (typep (first baz) 'injected-foobar))
-      (is-true (typep (second baz) 'some-injected))
-      (is (eq baz (obtain injector 'baz)))
-
-      (is (equal '(1 . 2) fac1))
-      (is (equal '(1 . 2) (obtain injector 'factory1)))
-      (is (not (eq fac1 (obtain injector 'factory1))))
-
-      (is (equal '(3 . 4) fac2))
-      (is (eq fac2 (obtain injector 'factory2)))
-
-      (is (equal '((5 . 6) (7 . 8)) fac3))
-      (is (equal '((5 . 6) (7 . 8)) (obtain injector 'factory3)))
-      (is (not (eq fac3 (obtain injector 'factory3))))
-
-      (is (equal '((9 . 10) (11 . 12)) fac4))
-      (is (eq fac4 (obtain injector 'factory4))))))
-
-;; TBD: injector-module macro
 ;; TBD: use binder for configuration, not injector itself
 ;; (thus avoiding the temptation to reconfigure injector during runtime)
 ;; TBD: associative bindings (via bind-mapping + in module spec; :map+ / :map= / :map! in module spec)
