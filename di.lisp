@@ -1,28 +1,37 @@
 (in-package :di)
 
-(defgeneric configure (injector module))
+(defgeneric configure (binder module))
+
+(defclass binder ()
+  ((bindings :reader bindings :initform (make-hash-table :test #'equal))))
+
+(defun binder-get (binder key)
+  (values (gethash key (bindings binder))))
+
+(defun (setf binder-get) (binding binder key)
+  (setf (gethash key (bindings binder)) binding))
 
 (defclass injector ()
-  ((bindings :reader bindings :initform (make-hash-table :test #'equal)))
+  ((binder :reader binder :initform (make-instance 'binder)))
   (:documentation "The Injector"))
 
 (defmethod initialize-instance :after ((injector injector) &key config &allow-other-keys)
-  (bind-value injector '(:scope :no-scope) (make-instance 'null-scope))
-  (bind-value injector '(:scope :singleton) (make-instance 'singleton-scope))
+  (bind-value (binder injector) '(:scope :no-scope) (make-instance 'null-scope))
+  (bind-value (binder injector) '(:scope :singleton) (make-instance 'singleton-scope))
   (dolist (item (flatten (ensure-list config)))
-    (configure injector item)))
+    (configure (binder injector) item)))
 
 (defmethod injector ((injector injector)) injector)
 
-(defmethod configure ((injector injector) (module function))
-  (funcall module injector))
+(defmethod configure ((binder binder) (module function))
+  (funcall module binder))
 
-(defmethod configure ((injector injector) (module symbol))
-  (configure injector (make-instance module)))
+(defmethod configure ((binder binder) (module symbol))
+  (configure binder (make-instance module)))
 
 (defclass module () ())
 
-(defmethod configure ((injector injector) (module module))
+(defmethod configure ((binder binder) (module module))
   (values))
 
 ;;; scope
@@ -48,7 +57,7 @@
 
 ;;; bindings
 
-(defgeneric binding-provider (binding))
+(defgeneric binding-provider (binding injector))
 
 (defgeneric binding-add-child (binding child-binding)
   (:method ((binding t) (child-binding t))
@@ -57,9 +66,7 @@
 (defgeneric binding-scope (binding))
 
 (defclass injector-binding ()
-  ((injector :reader injector :initarg :injector
-             :initform (error "must specify the injector"))
-   (scope :reader binding-scope :initarg :scope :initform :no-scope)))
+  ((scope :reader binding-scope :initarg :scope :initform :no-scope)))
 
 ;;; class-binding
 
@@ -81,21 +88,21 @@
                         (apply (provider injector (second value))
                                (inject-initargs injector (rest (rest value)))))))))))
 
-(defmethod binding-provider ((binding class-binding))
+(defmethod binding-provider ((binding class-binding) (injector injector))
   #'(lambda (&rest initargs)
       (let ((merged-initargs
               (append initargs
                       (inject-initargs
-                       (injector binding)
+                       injector
                        (apply #'remove-from-plist
                               (initargs binding)
                               (mapcar #'car (plist-alist initargs)))))))
         (or (when (recursive-p binding)
               ;; set allow-auto-p to nil so we only get non-null value
               ;; when explicit binding exists for the class-name
-              (obtain (injector binding) (class-name binding) nil))
+              (obtain injector (class-name binding) nil))
             (make-instance-for-injector
-             (injector binding)
+             injector
              (class-name binding)
              merged-initargs)))))
 
@@ -104,7 +111,7 @@
 (defclass value-binding (injector-binding)
   ((value :reader value :initarg :value)))
 
-(defmethod binding-provider ((binding value-binding))
+(defmethod binding-provider ((binding value-binding) (injector injector))
   #'(lambda () (value binding)))
 
 ;;; factory-binding
@@ -112,7 +119,7 @@
 (defclass factory-binding (injector-binding)
   ((factory :reader factory :initarg :factory)))
 
-(defmethod binding-provider ((binding factory-binding))
+(defmethod binding-provider ((binding factory-binding) (injector injector))
   #'(lambda () (funcall (factory binding))))
 
 ;;; multibinding
@@ -120,8 +127,9 @@
 (defclass multibinding (injector-binding)
   ((child-bindings :accessor child-bindings :initform '())))
 
-(defmethod binding-provider ((binding multibinding))
-  (let ((providers (mapcar #'binding-provider (reverse (child-bindings binding)))))
+(defmethod binding-provider ((binding multibinding) (injector injector))
+  (let ((providers (mapcar (rcurry #'binding-provider injector)
+                           (reverse (child-bindings binding)))))
     #'(lambda () (mapcar #'funcall providers))))
 
 (defmethod binding-add-child ((binding multibinding) child-binding)
@@ -129,63 +137,58 @@
 
 ;;; binding setup functions
 
-(defun bind-class (injector key provider &optional (scope :no-scope))
+(defun bind-class (binder key provider &optional (scope :no-scope))
   ;; TBD: make sure the injector wasn't configured yet
   (setf provider (ensure-list provider))
-  (setf (gethash key (bindings injector))
+  (setf (binder-get binder key)
         (make-instance 'class-binding
-                       :injector injector
                        :class-name (first provider)
                        :initargs (rest provider)
                        ;; avoid endless recursion
                        :recursive-p (not (eq key (first provider)))
                        :scope scope)))
 
-(defun bind-value (injector key value)
-  (setf (gethash key (bindings injector))
+(defun bind-value (binder key value)
+  (setf (binder-get binder key)
         (make-instance 'value-binding
-                       :injector injector
                        :value value)))
 
-(defun bind-factory (injector key factory &optional (scope :no-scope))
-  (setf (gethash key (bindings injector))
+(defun bind-factory (binder key factory &optional (scope :no-scope))
+  (setf (binder-get binder key)
         (make-instance 'factory-binding
-                       :injector injector
                        :factory factory
                        :scope scope)))
 
-(defun ensure-multibinding (injector key scope)
-  (or (gethash key (bindings injector))
-      (setf (gethash key (bindings injector))
+(defun ensure-multibinding (binder key scope)
+  (or (binder-get binder key)
+      (setf (binder-get binder key)
             (make-instance 'multibinding
-                           :injector injector
                            :scope scope))))
 
-(defun bind-empty* (injector key &optional (scope :no-scope))
-  (ensure-multibinding injector key scope))
+(defun bind-empty* (binder key &optional (scope :no-scope))
+  (ensure-multibinding binder key scope))
 
-(defun bind-class* (injector key provider &optional (scope :no-scope))
+(defun bind-class* (binder key provider &optional (scope :no-scope))
   (setf provider (ensure-list provider))
   (binding-add-child
-    (ensure-multibinding injector key scope)
+   (ensure-multibinding binder key scope)
    (make-instance 'class-binding
-                  :injector injector
                   :class-name (first provider)
                   :initargs (rest provider))))
 
-(defun bind-value* (injector key value &optional (scope :no-scope))
+(defun bind-value* (binder key value &optional (scope :no-scope))
   (binding-add-child
-   (ensure-multibinding injector key scope)
+   (ensure-multibinding binder key scope)
    (make-instance 'value-binding
-                  :injector injector
                   :value value)))
 
-(defun bind-factory* (injector key factory &optional (scope :no-scope))
+(defun bind-factory* (binder key factory &optional (scope :no-scope))
   (binding-add-child
-   (ensure-multibinding injector key scope)
+   (ensure-multibinding binder key scope)
    (make-instance 'factory-binding
-                  :injector injector
                   :factory factory)))
+
+;;; injector stuff
 
 (defun make-injector (&rest configs)
   (make-instance 'injector :config configs))
@@ -331,9 +334,9 @@
 
 (defun %provider-and-scope (base-instance key &optional (allow-auto-p t))
   (let* ((injector (injector base-instance))
-         (binding (gethash key (bindings injector))))
+         (binding (binder-get (binder injector) key)))
     (cond (binding
-           (values (binding-provider binding)
+           (values (binding-provider binding injector)
                    (binding-scope binding)))
           ((not allow-auto-p) (values nil nil))
           ((and key (symbolp key)
@@ -356,7 +359,7 @@
         (let ((scope-provider (provider injector (list :scope scope))))
           (scope-get (funcall scope-provider) key provider))))))
 
-;;; defmodule
+;;; defmodule / declarative-bindings
 
 (defun expand-provider-spec (provider-spec)
   (assert (match provider-spec
@@ -377,51 +380,51 @@
                        ((list :value v) `(list :value ,v))
                        (v v))))))
 
-(defun expand-binding (injector-var binding-spec)
+(defun expand-binding (binder-var binding-spec)
   (match binding-spec
     ((list := key value)
-     `(bind-value ,injector-var ',key ,value))
+     `(bind-value ,binder-var ',key ,value))
     ((or (list (or :* :+ :!+) key)
          (list (or :* :+ :!+) key (list :none))
          (list (or :* :+ :!+) key (list :none) scope))
-     `(bind-empty* ,injector-var ',key ,(or scope :no-scope)))
+     `(bind-empty* ,binder-var ',key ,(or scope :no-scope)))
     ((or (list :* key value)
          (list :* key value scope))
-     `(bind-value* ,injector-var ',key ,value ,(or scope :no-scope)))
+     `(bind-value* ,binder-var ',key ,value ,(or scope :no-scope)))
     ((or (list :+ key provider-spec)
          (list :+ key provider-spec scope))
-     `(bind-class* ,injector-var
+     `(bind-class* ,binder-var
                    ',key
                    ,(expand-provider-spec provider-spec)
                    ,(or scope :no-scope)))
     ((or (list :! key function)
          (list :! key function scope))
-     `(bind-factory ,injector-var
+     `(bind-factory ,binder-var
                     ',key
                     ,function
                     ,(or scope :no-scope)))
     ((or (list :!+ key function)
          (list :!+ key function scope))
-     `(bind-factory* ,injector-var
+     `(bind-factory* ,binder-var
                      ',key
                      ,function
                      ,(or scope :no-scope)))
     ((or (list key provider-spec)
          (list key provider-spec scope))
-     `(bind-class ,injector-var
+     `(bind-class ,binder-var
                   ',key
                   ,(expand-provider-spec provider-spec)
                   ,(or scope :no-scope)))
     (_ (error "invalid binding spec: ~s" binding-spec))))
 
 (defmacro defmodule (name (&rest supers) &body bindings)
-  (with-gensyms (injector module)
+  (with-gensyms (binder module)
     `(progn
        (defclass ,name ,(or supers '(module)) ())
-       (defmethod configure :after ((,injector injector) (,module ,name))
-         ,@(mapcar (curry #'expand-binding injector) bindings)))))
+       (defmethod configure :after ((,binder binder) (,module ,name))
+         ,@(mapcar (curry #'expand-binding binder) bindings)))))
 
 (defmacro declarative-bindings (&body bindings)
-  (with-gensyms (injector)
-    `#'(lambda (,injector)
-         ,@(mapcar (curry #'expand-binding injector) bindings))))
+  (with-gensyms (binder)
+    `#'(lambda (,binder)
+         ,@(mapcar (curry #'expand-binding binder) bindings))))

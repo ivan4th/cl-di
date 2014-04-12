@@ -18,9 +18,9 @@
 
 (defun make-sample-injector ()
   (make-injector
-   #'(lambda (injector)
-       (bind-class injector 'some-injected 'some-injected :singleton)
-       (bind-class injector 'another 'injected-foobar :singleton))))
+   #'(lambda (binder)
+       (bind-class binder 'some-injected 'some-injected :singleton)
+       (bind-class binder 'another 'injected-foobar :singleton))))
 
 (deftest test-initform-injection () ()
   (let* ((injector (make-sample-injector))
@@ -34,8 +34,8 @@
 
 (deftest test-initarg-injection () ()
   (let* ((injector (make-injector
-                    #'(lambda (injector)
-                        (bind-class injector :misc-foo 'some-barfoo)))))
+                    #'(lambda (binder)
+                        (bind-class binder :misc-foo 'some-barfoo)))))
     (is-true (typep (misc-foo (obtain injector 'injected-foobar))
                     'some-barfoo))))
 
@@ -72,13 +72,13 @@
 
 (defclass sample-module (module) ())
 
-(defmethod configure :after ((injector injector) (module sample-module))
-  (bind-class injector 'some 'some-injected))
+(defmethod configure :after ((binder binder) (module sample-module))
+  (bind-class binder 'some 'some-injected))
 
 (defclass another-module (module) ())
 
-(defmethod configure :after ((injector injector) (module another-module))
-  (bind-class injector 'another 'injected-foobar))
+(defmethod configure :after ((binder binder) (module another-module))
+  (bind-class binder 'another 'injected-foobar))
 
 (deftest test-modules () ()
   (let ((injector (make-injector '(sample-module another-module))))
@@ -87,9 +87,9 @@
 
 (deftest test-provider-bindings () ()
   (let* ((injector (make-injector
-                    #'(lambda (injector)
-                        (bind-class injector 'some 'some-injected)
-                        (bind-class injector 'another 'injected-foobar))))
+                    #'(lambda (binder)
+                        (bind-class binder 'some 'some-injected)
+                        (bind-class binder 'another 'injected-foobar))))
          (provide-some (provider injector 'some))
          (provide-some-injected (provider injector 'some-injected))
          (obj (funcall provide-some)))
@@ -105,9 +105,9 @@
 
 (deftest test-func-provider-bindings () ()
   (let* ((injector (make-injector
-                    #'(lambda (injector)
-                        (bind-class injector 'some 'some-injected)
-                        (bind-class injector'another 'injected-foobar))))
+                    #'(lambda (binder)
+                        (bind-class binder 'some 'some-injected)
+                        (bind-class binder 'another 'injected-foobar))))
          (l (func-with-providers 1 2 :injector injector)))
     (is (= 1 (first l)))
     (is (= 2 (second l)))
@@ -121,9 +121,9 @@
 
 (deftest test-method-provider-bindings () ()
   (let* ((injector (make-injector
-                    #'(lambda (injector)
-                        (bind-class injector 'some 'some-injected)
-                        (bind-class injector 'another 'injected-foobar))))
+                    #'(lambda (binder)
+                        (bind-class binder 'some 'some-injected)
+                        (bind-class binder 'another 'injected-foobar))))
          (l (some-gf 'a 'b :injector injector)))
     (is (eq 'a (first l)))
     (is (eq 'b (second l)))
@@ -132,9 +132,9 @@
 
 (deftest test-value-injection () ()
   (let ((injector (make-injector
-                   #'(lambda (injector)
-                       (bind-value injector 'some-injected 42)
-                       (bind-value injector 'another "qqq")))))
+                   #'(lambda (binder)
+                       (bind-value binder 'some-injected 42)
+                       (bind-value binder 'another "qqq")))))
     (is (equal (list 1 2 42 "qqq")
                (some-injected-func 1 2 :injector injector)))
     (is (= 42 (obtain injector 'some-injected)))
@@ -144,8 +144,8 @@
 
 (deftest test-binding-initargs () ()
   (let* ((injector (make-injector
-                    #'(lambda (injector)
-                        (bind-class injector
+                    #'(lambda (binder)
+                        (bind-class binder
                                     'some '(some-injected
                                             :whatever 42
                                             :whatever-misc "qqq"
@@ -153,7 +153,7 @@
                                                            :misc-foo (:value xxx))
                                             :whatever-foo (:value another)
                                             :whatever-bar (:inject another)))
-                        (bind-class injector 'another 'injected-foobar :singleton))))
+                        (bind-class binder 'another 'injected-foobar :singleton))))
          (obj (obtain injector 'some))
          (another (obtain injector 'another)))
     (is-true (typep obj 'some-injected))
@@ -169,9 +169,9 @@
 
 (deftest test-recursive-bindings () ()
   (let* ((injector (make-injector
-                    #'(lambda (injector)
-                        (bind-class injector 'another 'injected-foobar :singleton)
-                        (bind-class injector 'whatever 'another))))
+                    #'(lambda (binder)
+                        (bind-class binder 'another 'injected-foobar :singleton)
+                        (bind-class binder 'whatever 'another))))
          (another (obtain injector 'another))
          (whatever (obtain injector 'whatever)))
     (is-true (typep (obtain injector 'another) 'injected-foobar))
@@ -179,39 +179,39 @@
 
 (deftest test-value-multibindings () ()
   (let ((injector (make-injector
-                   #'(lambda (injector)
-                       (bind-value* injector 'whatever 'some-val)
-                       (bind-value* injector 'whatever 'another-val)))))
+                   #'(lambda (binder)
+                       (bind-value* binder 'whatever 'some-val)
+                       (bind-value* binder 'whatever 'another-val)))))
     (is (equal '(some-val another-val)
                (obtain injector 'whatever)))))
 
 (deftest test-class-multibindings () ()
   (let ((injector (make-injector
-                   #'(lambda (injector)
-                       (bind-class injector 'another 'injected-foobar)
-                       (bind-class* injector 'whatever 'some-injected)
-                       (bind-class* injector 'whatever 'another)))))
+                   #'(lambda (binder)
+                       (bind-class binder 'another 'injected-foobar)
+                       (bind-class* binder 'whatever 'some-injected)
+                       (bind-class* binder 'whatever 'another)))))
     (is (equal '(some-injected injected-foobar)
                (mapcar #'type-of (obtain injector 'whatever))))))
 
 (deftest test-class-multibindings-scope () ()
   (let* ((injector (make-injector
-                    #'(lambda (injector)
-                        (bind-value* injector 'foo 42 :singleton)
-                        (bind-class* injector 'foo 'injected-foobar))))
+                    #'(lambda (binder)
+                        (bind-value* binder 'foo 42 :singleton)
+                        (bind-class* binder 'foo 'injected-foobar))))
          (foo (obtain injector 'foo)))
     (is (eq foo (obtain injector 'foo)))))
 
 (deftest test-empty-multibindings () ()
   (let* ((injector (make-injector
-                    #'(lambda (injector)
-                        (bind-empty* injector 'foo)
-                        (bind-empty* injector 'bar)
-                        (bind-empty* injector 'baz :singleton)
-                        (bind-class* injector 'bar 'injected-foobar)
-                        (bind-class* injector 'baz 'injected-foobar)
+                    #'(lambda (binder)
+                        (bind-empty* binder 'foo)
+                        (bind-empty* binder 'bar)
+                        (bind-empty* binder 'baz :singleton)
+                        (bind-class* binder 'bar 'injected-foobar)
+                        (bind-class* binder 'baz 'injected-foobar)
                         ;; note: this does nothing
-                        (bind-empty* injector 'baz))))
+                        (bind-empty* binder 'baz))))
          (foo (obtain injector 'foo))
          (bar (obtain injector 'bar))
          (baz (obtain injector 'baz)))
@@ -223,22 +223,22 @@
 
 (deftest test-multibinding-provider () ()
   (let ((injector (make-injector
-                   #'(lambda (injector)
-                       (bind-class injector 'another 'injected-foobar :singleton)
-                       (bind-class* injector 'whatever 'another)
-                       (bind-value* injector 'whatever 42)))))
+                   #'(lambda (binder)
+                       (bind-class binder 'another 'injected-foobar :singleton)
+                       (bind-class* binder 'whatever 'another)
+                       (bind-value* binder 'whatever 42)))))
     (is (equal (list (obtain injector 'another) 42)
                (funcall (provider injector 'whatever))))))
 
 (deftest test-factory-bindings () ()
   (let* ((injector (make-injector
-                   #'(lambda (injector)
-                       (bind-factory injector 'foo #'(lambda () (list 42)))
-                       (bind-factory injector 'bar #'(lambda () (list "abc")) :singleton)
-                       (bind-factory* injector 'foobar #'(lambda () 'q))
-                       (bind-factory* injector 'foobar #'(lambda () 'r))
-                       (bind-factory* injector 'baz #'(lambda () 'qq) :singleton)
-                       (bind-factory* injector 'baz #'(lambda () 'rr)))))
+                    #'(lambda (binder)
+                        (bind-factory binder 'foo #'(lambda () (list 42)))
+                        (bind-factory binder 'bar #'(lambda () (list "abc")) :singleton)
+                        (bind-factory* binder 'foobar #'(lambda () 'q))
+                        (bind-factory* binder 'foobar #'(lambda () 'r))
+                        (bind-factory* binder 'baz #'(lambda () 'qq) :singleton)
+                        (bind-factory* binder 'baz #'(lambda () 'rr)))))
          (foo (obtain injector 'foo))
          (bar (obtain injector 'bar))
          (foobar (obtain injector 'foobar))
@@ -361,8 +361,6 @@
      (:!+ factory4 #'(lambda () (cons 9 10)) :singleton)
      (:!+ factory4 #'(lambda () (cons 11 12)))))))
 
-;; TBD: use binder for configuration, not injector itself
-;; (thus avoiding the temptation to reconfigure injector during runtime)
 ;; TBD: associative bindings (via bind-mapping + in module spec; :map+ / :map= / :map! in module spec)
 ;; TBD: :- as an alias for default binding in defmodule (for cases where one may want to bind key like :alist+)
 ;; TBD: don't do initform injection, parse (c2mop:class-default-initargs class) instead
