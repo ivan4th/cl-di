@@ -378,26 +378,41 @@
                        (v v))))))
 
 (defun expand-binding (injector-var binding-spec)
-  (or (match binding-spec
-        ((list := key value)
-         `(bind-value ,injector-var ',key ,value))
-        ((list (or :* :+) key)
-         `(bind-empty* ,injector-var ',key))
-        ((list :* key value)
-         `(bind-value* ,injector-var ',key ,value))
-        ((or (list :+ key provider-spec)
-             (list :+ key provider-spec scope))
-         `(bind-class* ,injector-var
-                       ',key
-                       ,(expand-provider-spec provider-spec)
-                       ,(or scope :no-scope)))
-        ((or (list key provider-spec)
-             (list key provider-spec scope))
-         `(bind-class ,injector-var
-                      ',key
-                      ,(expand-provider-spec provider-spec)
-                      ,(or scope :no-scope))))
-      (error "invalid binding spec: ~s" binding-spec)))
+  (match binding-spec
+    ((list := key value)
+     `(bind-value ,injector-var ',key ,value))
+    ((or (list (or :* :+ :!+) key)
+         (list (or :* :+ :!+) key (list :none))
+         (list (or :* :+ :!+) key (list :none) scope))
+     `(bind-empty* ,injector-var ',key ,(or scope :no-scope)))
+    ((or (list :* key value)
+         (list :* key value scope))
+     `(bind-value* ,injector-var ',key ,value ,(or scope :no-scope)))
+    ((or (list :+ key provider-spec)
+         (list :+ key provider-spec scope))
+     `(bind-class* ,injector-var
+                   ',key
+                   ,(expand-provider-spec provider-spec)
+                   ,(or scope :no-scope)))
+    ((or (list :! key function)
+         (list :! key function scope))
+     `(bind-factory ,injector-var
+                    ',key
+                    ,function
+                    ,(or scope :no-scope)))
+    ((or (list :!+ key function)
+         (list :!+ key function scope))
+     `(bind-factory* ,injector-var
+                     ',key
+                     ,function
+                     ,(or scope :no-scope)))
+    ((or (list key provider-spec)
+         (list key provider-spec scope))
+     `(bind-class ,injector-var
+                  ',key
+                  ,(expand-provider-spec provider-spec)
+                  ,(or scope :no-scope)))
+    (_ (error "invalid binding spec: ~s" binding-spec))))
 
 (defmacro defmodule (name (&rest supers) &body bindings)
   (with-gensyms (injector module)
