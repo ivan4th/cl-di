@@ -364,33 +364,49 @@
       (apply #'make-instance class-spec :injector injector initargs)
       (apply #'make-instance class-spec initargs)))
 
-(defun inject (key)
-  (obtain (or *current-injector*
-              (error "no current-injector (forgot to add INJECTED base class?)"))
-          key))
+(defun inject (key &optional default)
+  (if *current-injector*
+      (obtain *current-injector* key)
+      default))
+
+(defun inject-form-key (form)
+  (match form
+    ((list 'inject (list 'quote key)) key)
+    (_ nil)))
+
+(defun inject-default-initargs (injector instance)
+  (iter (for (initarg value nil) in
+         (c2mop:class-default-initargs (class-of instance)))
+        (when-let ((key (inject-form-key value)))
+          (collect (cons initarg (obtain injector key))))))
 
 (defun inject-slot-initargs (injector instance slot-names)
-  (dolist (slotd (c2mop:class-slots (class-of instance)))
-    (let ((slot-name (c2mop:slot-definition-name slotd)))
-      (when (or (eq t slot-names)
-                (member slot-name slot-names))
-        (let ((targets (iter (for initarg in (c2mop:slot-definition-initargs slotd))
-                             (when-let ((injected-instance (obtain injector initarg nil)))
-                               (collect injected-instance)))))
-          (when (rest targets)
-            (warn "ambiguous initarg binding: class ~s slot ~s initargs ~s"
-                  (type-of instance)
-                  slot-name
-                  (c2mop:slot-definition-initargs slotd)))
-          (when targets
-            (setf (slot-value instance slot-name)
-                  (first targets))))))))
+  (iter (for slotd in (c2mop:class-slots (class-of instance)))
+        (let ((slot-name (c2mop:slot-definition-name slotd)))
+          (when (or (eq t slot-names)
+                    (member slot-name slot-names))
+            (let ((targets (iter (for initarg in (c2mop:slot-definition-initargs slotd))
+                                 (when-let ((injected-instance (obtain injector initarg nil)))
+                                   (collect injected-instance)))))
+              (when (rest targets)
+                (warn "ambiguous initarg binding: class ~s slot ~s initargs ~s"
+                      (type-of instance)
+                      slot-name
+                      (c2mop:slot-definition-initargs slotd)))
+              (when targets
+                (collect (cons (first (c2mop:slot-definition-initargs slotd))
+                               (first targets)))))))))
 
-(defmethod shared-initialize :around ((injected injected) (slot-names t)
+(defmethod shared-initialize :around ((instance injected) (slot-names t)
+                                      &rest initargs
                                       &key injector &allow-other-keys)
   (let ((*current-injector* injector))
-    (inject-slot-initargs injector injected slot-names)
-    (call-next-method)))
+    (apply #'call-next-method instance slot-names
+           (alist-plist
+            (delete-duplicates
+             (append (inject-slot-initargs injector instance slot-names)
+                     (inject-default-initargs injector instance)
+                     (plist-alist initargs)))))))
 
 (defun %factory-and-scope (base-instance key &optional (allow-auto-p t))
   (let* ((injector (injector base-instance))

@@ -22,6 +22,7 @@
        (config-bind binder 'some-injected
                     :to 'some-injected
                     :scope :singleton)
+       ;; overrided below
        (config-bind binder 'another
                     :to 'some-injected)
        ;; override
@@ -38,6 +39,22 @@
     (is (eq (another obj) (obtain obj 'another)))
     ;; different binding key
     (is (not (eq (another obj) (obtain injector 'injected-foobar))))))
+
+(defclass foobar2 (injected)
+  ((another :accessor another
+            :initform (error "no :ANOTHER specified")
+            :initarg :another)
+   (misc :accessor misc
+         :initform (error "no :MISC specified")
+         :initarg :misc))
+  (:default-initargs :another (inject 'another)
+                     :misc (inject 'some-barfoo)))
+
+(deftest test-default-initarg-injection () ()
+  (let* ((injector (make-sample-injector))
+         (foobar2 (obtain injector 'foobar2)))
+    (is (typep (another foobar2) 'injected-foobar))
+    (is (typep (misc foobar2) 'some-barfoo))))
 
 (deftest test-initarg-injection () ()
   (let* ((injector (make-injector
@@ -141,6 +158,7 @@
   (let ((injector (make-injector
                    #'(lambda (binder)
                        (config-bind binder 'some-injected :to-value 42)
+                       ;; overrided below
                        (config-bind binder 'another :to-value "aaa")
                        ;; override
                        (config-bind binder 'another :to-value "qqq")))))
@@ -278,6 +296,7 @@
   (let* ((injector (make-injector
                     #'(lambda (binder)
                         (config-mapbind binder 'foo)
+                        ;; overrided below
                         (config-mapbind binder 'foo :map-key 'abc :to-value 1)
                         ;; override
                         (config-mapbind binder 'foo :map-key 'abc :to-value 2)
@@ -288,6 +307,7 @@
                                         :map-key 'abc
                                         :to-value 42
                                         :scope :singleton)
+                        ;; overrided below
                         (config-mapbind binder 'bar
                                         :map-key 'def
                                         :to '(injected-foobar :misc-foo 4200))
@@ -447,9 +467,8 @@
       (map2 (:map abc (:value 4242)
                   def (:factory #'(lambda () (cons 15 16)))))))))
 
-;; TBD: don't do initform injection, parse (c2mop:class-default-initargs class) instead
-;; (look for second values). (inject key [default]) should return default if it's present
-;; in case it's actually run, or throw an error if it's run and there's no default specified
 ;; TBD: use :via instead of :injector for injected fns/GFs
-;; TBD: injection defaults for initargs (incl. :default-initargs) / keyword arguments (for cases when there's no injector)
+;; TBD: test injection defaults for initargs (incl. :default-initargs) / keyword arguments (for cases when there's no injector)
+;; Make sure (INJECT ...) form signals an error (of specific class) if there's no current injector
+;; (this must be handled by INJECTED clas and /INJECTED macrology)
 ;; TBD: thread-local scope & scope extensibility (export symbols)
