@@ -69,10 +69,10 @@
 
 (deftest test-defun-injected () ()
   (let* ((injector (make-sample-injector))
-         (l1 (some-injected-func 1 2 :injector injector))
+         (l1 (some-injected-func 1 2 :via injector))
          (obj (obtain injector 'some-injected))
          (foobar (obtain injector 'another))
-         (l2 (some-injected-func 3 4 :foobar 'x :injector obj)))
+         (l2 (some-injected-func 3 4 :foobar 'x :via obj)))
     (is (equal (list 1 2 obj foobar) l1))
     (is (eq (another obj) (obtain injector 'another)))
     (is (equal (list 3 4 obj 'x) l2))))
@@ -86,10 +86,10 @@
 
 (deftest test-defmethod-injected () ()
   (let* ((injector (make-sample-injector))
-         (l1 (some-gf 1 2 :injector injector))
+         (l1 (some-gf 1 2 :via injector))
          (obj (obtain injector 'some-injected))
          (foobar (obtain injector 'another))
-         (l2 (some-gf 3 4 :foobar 'x :injector obj)))
+         (l2 (some-gf 3 4 :foobar 'x :via obj)))
     (is (equal (list 1 2 obj foobar) l1))
     (is (eq (another obj) (obtain injector 'another)))
     (is (equal (list 3 4 obj 'x) l2))))
@@ -132,7 +132,7 @@
                     #'(lambda (binder)
                         (config-bind binder 'some :to 'some-injected)
                         (config-bind binder 'another :to 'injected-foobar))))
-         (l (func-with-factory 1 2 :injector injector)))
+         (l (func-with-factory 1 2 :via injector)))
     (is (= 1 (first l)))
     (is (= 2 (second l)))
     (is-true (typep (third l) 'some-injected))
@@ -148,7 +148,7 @@
                     #'(lambda (binder)
                         (config-bind binder 'some :to 'some-injected)
                         (config-bind binder 'another :to 'injected-foobar))))
-         (l (some-gf 'a 'b :injector injector)))
+         (l (some-gf 'a 'b :via injector)))
     (is (eq 'a (first l)))
     (is (eq 'b (second l)))
     (is-true (typep (third l) 'some-injected))
@@ -163,7 +163,7 @@
                        ;; override
                        (config-bind binder 'another :to-value "qqq")))))
     (is (equal (list 1 2 42 "qqq")
-               (some-injected-func 1 2 :injector injector)))
+               (some-injected-func 1 2 :via injector)))
     (is (= 42 (obtain injector 'some-injected)))
     (is (string= "qqq" (obtain injector 'another)))
     (is (= 42 (funcall (get-factory injector 'some-injected))))
@@ -467,7 +467,6 @@
       (map2 (:map abc (:value 4242)
                   def (:factory #'(lambda () (cons 15 16)))))))))
 
-;; TBD: use :via instead of :injector for injected fns/GFs
 ;; TBD: test injection defaults for initargs (incl. :default-initargs) / keyword arguments (for cases when there's no injector)
 ;; Make sure (INJECT ...) form signals an error (of specific class) if there's no current injector
 ;; (this must be handled by INJECTED clas and /INJECTED macrology)

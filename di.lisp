@@ -299,9 +299,9 @@
       (setf name (second name)))
     (when allow-inject-p
       (when (typep init '(cons (eql :inject) (cons symbol null)))
-        (setf init `(obtain injector ',(second init))))
+        (setf init `(obtain via ',(second init))))
       (when (typep init '(cons (eql :factory) (cons symbol null)))
-        (setf init `(get-factory injector ',(second init)))))
+        (setf init `(get-factory via ',(second init)))))
     (cond (supplied-p
            (list name init supplied-p))
           (init
@@ -319,17 +319,17 @@
         required
         (when optional (cons '&optional (mapcar #'injected-opt-arg optional)))
         (when rest (list '&rest rest))
-        ;; add INJECTOR keyword argument
-        '(&key (injector (error "injector expected")))
+        ;; add VIA keyword argument
+        '(&key (via (error ":VIA expected")))
         (mapcar (rcurry #'injected-opt-arg t) keyargs)
         (when allow-other-keys-p '(&allow-other-keys))
         (when aux (cons '&aux aux)))
         (if (or inject factory)
             `((let ,(append
                      (iter (for (name key) in inject)
-                           (collect `(,name (obtain injector ',key))))
+                           (collect `(,name (obtain via ',key))))
                      (iter (for (name key) in factory)
-                           (collect `(,name (get-factory injector ',key)))))
+                           (collect `(,name (get-factory via ',key)))))
                 ,@body))
             body)))))
 
@@ -351,7 +351,7 @@
 (defclass injected ()
   ((injector
     :accessor injector
-    :initarg :injector
+    :initarg :via
     :initform (error "cannot create injected class instance without injector")
     :documentation "Injector instance"))
   (:documentation "Base class for classes utilizing DI"))
@@ -359,9 +359,9 @@
 (defvar *current-injector* nil) ;; TBD: perhaps wrap slime repl so that *current-injector* is set there
 
 (defun make-instance-for-injector (injector class-spec initargs)
-  ;; skip :injector initarg for non-injected classes
+  ;; skip :via initarg for non-injected classes
   (if (subtypep class-spec 'injected)
-      (apply #'make-instance class-spec :injector injector initargs)
+      (apply #'make-instance class-spec :via injector initargs)
       (apply #'make-instance class-spec initargs)))
 
 (defun inject (key &optional default)
@@ -399,13 +399,13 @@
 
 (defmethod shared-initialize :around ((instance injected) (slot-names t)
                                       &rest initargs
-                                      &key injector &allow-other-keys)
-  (let ((*current-injector* injector))
+                                      &key via &allow-other-keys)
+  (let ((*current-injector* via))
     (apply #'call-next-method instance slot-names
            (alist-plist
             (delete-duplicates
-             (append (inject-slot-initargs injector instance slot-names)
-                     (inject-default-initargs injector instance)
+             (append (inject-slot-initargs via instance slot-names)
+                     (inject-default-initargs via instance)
                      (plist-alist initargs)))))))
 
 (defun %factory-and-scope (base-instance key &optional (allow-auto-p t))
