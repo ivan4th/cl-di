@@ -10,6 +10,7 @@
            #:configure
            #:config-bind
            #:config-multibind
+           #:config-mapbind
            #:provider
            #:make-class-provider
            #:make-value-provider

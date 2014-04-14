@@ -71,6 +71,10 @@
   (:method ((provider t) (child-provider t))
     (error "can't add child to a non-sequence provider")))
 
+(defgeneric provider-add-key (provider key child-provider)
+  (:method ((provider t) (key t) (child-provider t))
+    (error "can't add key to a non-mapping provider")))
+
 ;;; provider (marker class)
 
 (defclass provider () ())
@@ -142,6 +146,26 @@
 (defmethod provider-add-child ((provider sequence-provider) child-provider)
   (push child-provider (children provider)))
 
+;;; mapping-provider
+
+(defclass mapping-provider (provider)
+  ((child-alist :accessor child-alist :initform '())))
+
+(defmethod provider-factory-function ((provider mapping-provider) (injector injector))
+  (let ((factory-alist
+          (iter (for (key . child-provider) in (reverse (child-alist provider)))
+                (collect (cons key (provider-factory-function child-provider injector))))))
+    #'(lambda ()
+        (iter (for (key . factory) in factory-alist)
+              (collect (cons key (funcall factory)))))))
+
+(defmethod provider-add-key ((provider mapping-provider) key child-provider)
+  (let ((existing (assoc key (child-alist provider))))
+    (if existing
+        (setf (cdr existing) child-provider)
+        (setf (child-alist provider)
+              (acons key child-provider (child-alist provider))))))
+
 ;;; recursive-provider
 
 (defclass recursive-provider (provider)
@@ -196,12 +220,33 @@
         ((not (typep (binding-provider (binder-get binder key))
                      'sequence-provider))
          (error "trying to use CONFIG-MULTIBIND with key that was ~
-                 previously used with CONFIG-BIND")))
+                 previously used with CONFIG-BIND or CONFIG-MAPBIND")))
   (when (or to-p to-value-p)
     (provider-add-child (binding-provider (binder-get binder key))
                         (if to-value
                             (make-value-provider to-value)
                             (auto-provider to)))))
+
+(defun config-mapbind (binder key
+                       &key (map-key nil map-key-p)
+                         (to nil to-p)
+                         (to-value nil to-value-p)
+                         (scope :no-scope))
+  (cond ((not (binder-get binder key))
+         (setf (binder-get binder key)
+               (make-binding (make-instance 'mapping-provider) scope)))
+        ((not (typep (binding-provider (binder-get binder key))
+                     'mapping-provider))
+         (error "trying to use CONFIG-MAPBIND with key that was ~
+                 previously used with CONFIG-BIND or CONFIG-MULTIBIND")))
+  (when map-key-p
+    (assert (or to-p to-value-p) ()
+            "CONFIG-MAPBIND: must specify either :TO or :TO-VALUE")
+    (provider-add-key (binding-provider (binder-get binder key))
+                      map-key
+                      (if to-value
+                          (make-value-provider to-value)
+                          (auto-provider to)))))
 
 ;;; injector stuff
 
@@ -394,35 +439,50 @@
                '())))))
 
 (defun expand-provider-spec (binder-var key provider-spec
-                             &optional (scope :no-scope) (bind-fn 'config-bind))
-  (match provider-spec
-    ((list :value value)
-     `(,bind-fn ,binder-var ',key :to-value ,value :scope ',scope))
-    ((list :key recursive-key)
-     `(,bind-fn ,binder-var ',key
-                :to (make-recursive-provider ',recursive-key)
-                :scope ',scope))
-    ((list :seq)
-     (assert (eq 'config-bind bind-fn) () "bad (:SEQ ...) binding")
-     `(config-multibind ,binder-var ',key :scope ',scope))
-    ((list :seq pspec)
-     (assert (eq 'config-bind bind-fn) () "bad (:SEQ ...) binding")
-     (expand-provider-spec binder-var key (ensure-list pspec)
-                           scope 'config-multibind))
-    ((list :factory expr)
-     `(,bind-fn ,binder-var ',key :to ,expr :scope ',scope))
-    ((list* (guard class-name (case class-name
-                                ((nil t) nil)
-                                (t (and (symbolp class-name)
-                                        (not (keywordp class-name))))))
-            initargs)
-     `(,bind-fn ,binder-var ',key
-                :to (make-class-provider
-                     ',class-name
-                     ,(expand-provider-initargs initargs))
-                :scope ',scope))
-    (_
-     (error "invalid provider spec: ~s" provider-spec))))
+                             &optional (scope :no-scope) (bind-fn 'config-bind)
+                               (map-key nil map-key-p))
+  ;; TBD: ,@(when map-key-p `(:map-key ',map-key)) everywhere, use flet
+  (flet ((bind-call (&rest args)
+           `((,bind-fn ,binder-var ',key ,@args
+                       ,@(when map-key-p `(:map-key ',map-key))
+                       :scope ',scope))))
+    (match provider-spec
+      ((list :value value)
+       (bind-call :to-value value))
+      ((list :key recursive-key)
+       (bind-call :to `(make-recursive-provider ',recursive-key)))
+      ((list :seq)
+       (assert (eq 'config-bind bind-fn) () "bad (:SEQ ...) binding")
+       (setf bind-fn 'config-multibind)
+       `((config-multibind ,binder-var ',key :scope ',scope)))
+      ((list* :seq pspecs)
+       (assert (eq 'config-bind bind-fn) () "bad (:SEQ ...) binding")
+       (iter (for pspec in pspecs)
+             (appending
+                 (expand-provider-spec binder-var key (ensure-list pspec)
+                                       scope 'config-multibind))))
+      ((list :map)
+       (assert (eq 'config-bind bind-fn) () "bad (:MAP ...) binding")
+       `((config-mapbind ,binder-var ',key :scope ',scope)))
+      ((list* :map map-spec)
+       (assert (eq 'config-bind bind-fn) () "bad (:MAP ...) binding")
+       (iter (for (sub-map-key pspec . nil) on map-spec by #'cddr)
+             (appending
+                 (expand-provider-spec binder-var key
+                                       (ensure-list pspec)
+                                       scope 'config-mapbind sub-map-key))))
+      ((list :factory expr)
+       (bind-call :to expr))
+      ((list* (guard class-name (case class-name
+                                  ((nil t) nil)
+                                  (t (and (symbolp class-name)
+                                          (not (keywordp class-name))))))
+              initargs)
+       (bind-call :to `(make-class-provider
+                        ',class-name
+                        ,(expand-provider-initargs initargs))))
+      (_
+       (error "invalid provider spec: ~s" provider-spec)))))
 
 (defun expand-binding (binder-var binding-spec)
   (match binding-spec
@@ -438,9 +498,9 @@
     `(progn
        (defclass ,name ,(or supers '(module)) ())
        (defmethod configure :after ((,binder binder) (,module ,name))
-         ,@(mapcar (curry #'expand-binding binder) bindings)))))
+         ,@(mappend (curry #'expand-binding binder) bindings)))))
 
 (defmacro declarative-bindings (&body bindings)
   (with-gensyms (binder)
     `#'(lambda (,binder)
-         ,@(mapcar (curry #'expand-binding binder) bindings))))
+         ,@(mappend (curry #'expand-binding binder) bindings))))

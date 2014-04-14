@@ -269,6 +269,48 @@
     (is (eq baz (obtain injector 'baz)))
     (is (equal '(qq rr) (obtain injector 'baz)))))
 
+(deftest test-mapbind () ()
+  (let* ((injector (make-injector
+                    #'(lambda (binder)
+                        (config-mapbind binder 'foo)
+                        (config-mapbind binder 'foo :map-key 'abc :to-value 1)
+                        ;; override
+                        (config-mapbind binder 'foo :map-key 'abc :to-value 2)
+                        (config-mapbind binder 'foo
+                                        :map-key 'def
+                                        :to '(injected-foobar :misc-foo 42))
+                        (config-mapbind binder 'bar
+                                        :map-key 'abc
+                                        :to-value 42
+                                        :scope :singleton)
+                        (config-mapbind binder 'bar
+                                        :map-key 'def
+                                        :to '(injected-foobar :misc-foo 4200))
+                        ;; override
+                        (config-mapbind binder 'bar
+                                        :map-key 'def
+                                        :to '(injected-foobar :misc-foo 4242)))))
+         (foo (obtain injector 'foo))
+         (foo1 (obtain injector 'foo))
+         (bar (obtain injector 'bar))
+         (bar1 (obtain injector 'bar)))
+    (flet ((frob (alist)
+             (sort
+              (iter (for (k . v) in alist)
+                    (collect
+                        (cons k
+                              (typecase v
+                                (injected-foobar (list :ifoo (misc-foo v)))
+                                (t v)))))
+              #'string<
+              :key #'car)))
+      (is (equal '((abc . 2) (def . (:ifoo 42))) (frob foo)))
+      (is (frob foo) (frob foo1))
+      (is (not (eq foo foo1)))
+
+      (is (equal '((abc . 42) (def . (:ifoo 4242))) (frob bar)))
+      (is (eq bar bar1)))))
+
 (defmodule sample-decl-module ()
   (another injected-foobar :singleton)
   (some-injected
@@ -290,11 +332,17 @@
   (factory1 (:factory #'(lambda () (cons 1 2))))
   (factory2 (:factory #'(lambda () (cons 3 4))) :singleton)
   (factory3 (:seq))
-  (factory3 (:seq (:factory #'(lambda () (cons 5 6)))))
-  (factory3 (:seq (:factory #'(lambda () (cons 7 8)))))
+  (factory3 (:seq (:factory #'(lambda () (cons 5 6)))
+                  (:factory #'(lambda () (cons 7 8)))))
   (factory4 (:seq) :singleton)
   (factory4 (:seq (:factory #'(lambda () (cons 9 10)))) :singleton)
-  (factory4 (:seq (:factory #'(lambda () (cons 11 12))))))
+  (factory4 (:seq (:factory #'(lambda () (cons 11 12)))))
+  (map1 (:map))
+  (map1 (:map abc (:value "abc")))
+  (map1 (:map def (:factory #'(lambda () (cons 13 14)))))
+  (map2 (:map) :singleton)
+  (map2 (:map abc (:value 4242)
+              def (:factory #'(lambda () (cons 15 16))))))
 
 (defun verify-declarative-bindings (injector)
   (let ((another (obtain injector 'another))
@@ -304,7 +352,9 @@
         (fac1 (obtain injector 'factory1))
         (fac2 (obtain injector 'factory2))
         (fac3 (obtain injector 'factory3))
-        (fac4 (obtain injector 'factory4)))
+        (fac4 (obtain injector 'factory4))
+        (map1 (obtain injector 'map1))
+        (map2 (obtain injector 'map2)))
     (is (equal another (obtain injector 'another)))
     (is-true (typep another 'injected-foobar))
 
@@ -342,7 +392,18 @@
     (is (not (eq fac3 (obtain injector 'factory3))))
 
     (is (equal '((9 . 10) (11 . 12)) fac4))
-    (is (eq fac4 (obtain injector 'factory4)))))
+    (is (eq fac4 (obtain injector 'factory4)))
+
+    (is (equal '((abc . "abc") (def . (13 . 14)))
+               (sort map1 #'string< :key #'car)))
+    (is (equal '((abc . "abc") (def . (13 . 14)))
+               (sort (obtain injector 'map1)
+                     #'string< :key #'car)))
+    (is (not (eq map1 (obtain injector 'map1))))
+
+    (is (equal '((abc . 4242) (def . (15 . 16)))
+               (sort map2 #'string< :key #'car)))
+    (is (eq map2 (obtain injector 'map2)))))
 
 (deftest test-defmodule () ()
   (verify-declarative-bindings (make-injector 'inherited-decl-module)))
@@ -369,14 +430,19 @@
       (factory1 (:factory #'(lambda () (cons 1 2))))
       (factory2 (:factory #'(lambda () (cons 3 4))) :singleton)
       (factory3 (:seq))
-      (factory3 (:seq (:factory #'(lambda () (cons 5 6)))))
-      (factory3 (:seq (:factory #'(lambda () (cons 7 8)))))
+      (factory3 (:seq (:factory #'(lambda () (cons 5 6)))
+                      (:factory #'(lambda () (cons 7 8)))))
       (factory4 (:seq) :singleton)
       (factory4 (:seq (:factory #'(lambda () (cons 9 10)))) :singleton)
-      (factory4 (:seq (:factory #'(lambda () (cons 11 12)))))))))
+      (factory4 (:seq (:factory #'(lambda () (cons 11 12)))))
+      (map1 (:map))
+      (map1 (:map abc (:value "abc")))
+      (map1 (:map def (:factory #'(lambda () (cons 13 14)))))
+      (map2 (:map) :singleton)
+      (map2 (:map abc (:value 4242)
+                  def (:factory #'(lambda () (cons 15 16)))))))))
 
-;; TBD: associative bindings (via bind-mapping; :map+ / :map= / :map! in module spec; support empty mapping bindings, too)
-;; TBD: :- as an alias for default binding in defmodule (for cases where one may want to bind key like :alist+)
+;; TBD: test overriding config-bind
 ;; TBD: don't do initform injection, parse (c2mop:class-default-initargs class) instead
 ;; (look for second values). (inject key [default]) should return default if it's present
 ;; in case it's actually run, or throw an error if it's run and there's no default specified
