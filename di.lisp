@@ -1,5 +1,7 @@
 (in-package :di)
 
+(define-condition injection-error (simple-error) ())
+
 (defgeneric configure (binder module))
 
 (defclass binder ()
@@ -298,16 +300,31 @@
     (when (consp name)
       (setf name (second name)))
     (when allow-inject-p
-      (when (typep init '(cons (eql :inject) (cons symbol null)))
-        (setf init `(obtain via ',(second init))))
-      (when (typep init '(cons (eql :factory) (cons symbol null)))
-        (setf init `(get-factory via ',(second init)))))
+      (match init
+        ((list :inject key)
+         (setf init `(%get/default via ',key)))
+        ((list :inject key default)
+         (setf init `(%get/default via ',key obtain ,default)))
+        ((list :factory key)
+         (setf init `(%get/default via ',key get-factory)))
+        ((list :factory key default)
+         (setf init `(%get/default via ',key get-factory ,default)))))
     (cond (supplied-p
            (list name init supplied-p))
           (init
            (list name init))
           (t
            name))))
+
+;; expand &inject and &factory items
+(defun special-arg-let-bindings (args obtain-func)
+  (iter (for item in args)
+        (destructuring-bind (name key &optional (default nil default-p))
+            (ensure-list item)
+          (collect `(,name (%get/default
+                               via ',key
+                               ,obtain-func
+                               ,@(when default-p (list default))))))))
 
 (defun expand-injected (lambda-list body &key allow-specializers)
   (multiple-value-bind (plain inject factory)
@@ -320,16 +337,14 @@
         (when optional (cons '&optional (mapcar #'injected-opt-arg optional)))
         (when rest (list '&rest rest))
         ;; add VIA keyword argument
-        '(&key (via (error ":VIA expected")))
+        '(&key via)
         (mapcar (rcurry #'injected-opt-arg t) keyargs)
         (when allow-other-keys-p '(&allow-other-keys))
         (when aux (cons '&aux aux)))
         (if (or inject factory)
             `((let ,(append
-                     (iter (for (name key) in inject)
-                           (collect `(,name (obtain via ',key))))
-                     (iter (for (name key) in factory)
-                           (collect `(,name (get-factory via ',key)))))
+                     (special-arg-let-bindings inject 'obtain)
+                     (special-arg-let-bindings factory 'get-factory))
                 ,@body))
             body)))))
 
@@ -352,11 +367,11 @@
   ((injector
     :accessor injector
     :initarg :via
-    :initform (error "cannot create injected class instance without injector")
+    :initform nil
     :documentation "Injector instance"))
   (:documentation "Base class for classes utilizing DI"))
 
-(defvar *current-injector* nil) ;; TBD: perhaps wrap slime repl so that *current-injector* is set there
+(defvar *inject-catch-nodefault* nil)
 
 (defun make-instance-for-injector (injector class-spec initargs)
   ;; skip :via initarg for non-injected classes
@@ -364,10 +379,12 @@
       (apply #'make-instance class-spec :via injector initargs)
       (apply #'make-instance class-spec initargs)))
 
-(defun inject (key &optional default)
-  (if *current-injector*
-      (obtain *current-injector* key)
-      default))
+(defun inject (key &optional (default nil default-p) (catch-nodefault *inject-catch-nodefault*))
+  (declare (ignore key))
+  (cond (default-p default)
+        (catch-nodefault
+         (error 'injection-error :format-control "injector required"))
+        (t nil)))
 
 (defun inject-form-key (form)
   (match form
@@ -375,10 +392,13 @@
     (_ nil)))
 
 (defun inject-default-initargs (injector instance)
-  (iter (for (initarg value nil) in
+  (iter (for (initarg value function) in
          (c2mop:class-default-initargs (class-of instance)))
         (when-let ((key (inject-form-key value)))
-          (collect (cons initarg (obtain injector key))))))
+          (if injector
+              (collect (cons initarg (obtain injector key)))
+              (let ((*inject-catch-nodefault* t))
+                (funcall function))))))
 
 (defun inject-slot-initargs (injector instance slot-names)
   (iter (for slotd in (c2mop:class-slots (class-of instance)))
@@ -400,13 +420,13 @@
 (defmethod shared-initialize :around ((instance injected) (slot-names t)
                                       &rest initargs
                                       &key via &allow-other-keys)
-  (let ((*current-injector* via))
-    (apply #'call-next-method instance slot-names
-           (alist-plist
-            (delete-duplicates
-             (append (inject-slot-initargs via instance slot-names)
-                     (inject-default-initargs via instance)
-                     (plist-alist initargs)))))))
+  (apply #'call-next-method instance slot-names
+         (alist-plist
+          (delete-duplicates
+           (append (when via
+                     (inject-slot-initargs via instance slot-names))
+                   (inject-default-initargs via instance)
+                   (plist-alist initargs))))))
 
 (defun %factory-and-scope (base-instance key &optional (allow-auto-p t))
   (let* ((injector (injector base-instance))
@@ -436,6 +456,16 @@
       (when factory
         (let ((scope-factory (get-factory injector (list :scope scope))))
           (scope-get (funcall scope-factory) key factory))))))
+
+(defmacro %get/default (base-instance key &optional (func 'obtain) (default nil default-p))
+  (once-only (base-instance)
+    `(if ,base-instance
+         (,func ,base-instance ,key)
+         ,(if default-p
+              default
+              `(error 'injection-error
+                      :format-control ":VIA required (key: ~s)"
+                      :format-arguments (list ,key))))))
 
 ;;; defmodule / declarative-bindings
 

@@ -4,6 +4,7 @@
   (:use :cl :alexandria :iterate :optima)
   (:export #:make-injector
            #:injector
+           #:injection-error
            #:binder
            #:inject
            #:injected

@@ -4,12 +4,13 @@
 (in-package :di.tests)
 
 (defclass some-injected (injected)
-  ((another :accessor another :initform (inject 'another))
+  ((another :accessor another :initarg :another)
    (whatever :accessor whatever :initarg :whatever)
    (whatever-misc :accessor whatever-misc :initarg :whatever-misc)
    (whatever-etc :accessor whatever-etc :initarg :whatever-etc)
    (whatever-foo :accessor whatever-foo :initarg :whatever-foo)
-   (whatever-bar :accessor whatever-bar :initarg :whatever-bar)))
+   (whatever-bar :accessor whatever-bar :initarg :whatever-bar))
+  (:default-initargs :another (inject 'another)))
 
 (defclass injected-foobar (injected)
   ((misc-foo :accessor misc-foo :initarg :misc-foo)))
@@ -30,7 +31,7 @@
                     :to 'injected-foobar
                     :scope :singleton))))
 
-(deftest test-initform-injection () ()
+(deftest test-initarg-injection-with-scope () ()
   (let* ((injector (make-sample-injector))
          (obj (obtain injector 'some-injected)))
     (is-true (typep (another obj) 'injected-foobar))
@@ -56,6 +57,24 @@
     (is (typep (another foobar2) 'injected-foobar))
     (is (typep (misc foobar2) 'some-barfoo))))
 
+(defclass foobar3 (injected)
+  ((another :accessor another
+            :initform (error "no :ANOTHER specified")
+            :initarg :another)
+   (misc :accessor misc
+         :initform (inject 'misc 'misc-default)
+         :initarg :misc))
+  (:default-initargs :another (inject 'another 'another-default)))
+
+(deftest test-inject-defaults () ()
+  (let ((foobar3 (make-instance 'foobar3)))
+    (is (eq 'another-default (another foobar3)))
+    (is (eq 'misc-default (misc foobar3)))))
+
+(deftest test-inject-nodefault () ()
+  (signals injection-error (make-instance 'some-injected))
+  (signals injection-error (make-instance 'foobar2)))
+
 (deftest test-initarg-injection () ()
   (let* ((injector (make-injector
                     #'(lambda (binder)
@@ -77,6 +96,17 @@
     (is (eq (another obj) (obtain injector 'another)))
     (is (equal (list 3 4 obj 'x) l2))))
 
+(deftest test-defun-injected-nodefault () ()
+  (signals injection-error (some-injected-func 1 2)))
+
+(defun/injected some-injected-func+defaults (abc def &inject (sobj some-injected 'sobj-default)
+                                                 &key (foobar (:inject another 'another-default)))
+  (list abc def sobj foobar))
+
+(deftest test-defun-injected-defaults () ()
+  (is (equal '(1 2 sobj-default another-default)
+             (some-injected-func+defaults 1 2))))
+
 (defgeneric some-gf (abc def &key &allow-other-keys))
 
 (defmethod/injected some-gf ((abc number) (def number)
@@ -93,6 +123,18 @@
     (is (equal (list 1 2 obj foobar) l1))
     (is (eq (another obj) (obtain injector 'another)))
     (is (equal (list 3 4 obj 'x) l2))))
+
+(deftest test-defmethod-injected-nodefault () ()
+  (signals injection-error (some-gf 1 2)))
+
+(defmethod/injected some-gf ((abc (eql :def)) (def (eql :def))
+                             &inject (sobj some-injected 'sobj-default)
+                             &key (foobar (:inject another 'another-default)))
+  (list abc def sobj foobar))
+
+(deftest test-defmethod-injected-defaults () ()
+  (is (equal '(:def :def sobj-default another-default)
+             (some-gf :def :def))))
 
 (defclass sample-module (module) ())
 
@@ -138,6 +180,19 @@
     (is-true (typep (third l) 'some-injected))
     (is-true (typep (fourth l) 'injected-foobar))))
 
+(deftest test-func-factory-nodefault () ()
+  (signals injection-error (func-with-factory 1 2)))
+
+(defun/injected func-with-factory+defaults
+    (abc def
+         &factory (make-sobj some-injected #'(lambda () 'sobj-default))
+         &key (make-foobar (:factory another #'(lambda () 'another-default))))
+  (list abc def (funcall make-sobj) (funcall make-foobar)))
+
+(deftest test-func-factory-defaults () ()
+  (is (equal '(1 2 sobj-default another-default)
+             (func-with-factory+defaults 1 2))))
+
 (defmethod/injected some-gf ((abc symbol) (def symbol)
                              &factory (make-sobj some-injected)
                              &key (make-foobar (:factory another)))
@@ -153,6 +208,18 @@
     (is (eq 'b (second l)))
     (is-true (typep (third l) 'some-injected))
     (is-true (typep (fourth l) 'injected-foobar))))
+
+(deftest test-method-factory-bindings-nodefault () ()
+  (signals injection-error (some-gf 'a 'b)))
+
+(defmethod/injected some-gf ((abc (eql :def)) (def (eql :def))
+                             &factory (make-sobj some-injected #'(lambda () 'sobj-default))
+                             &key (make-foobar (:factory another #'(lambda () 'another-default))))
+  (list abc def (funcall make-sobj) (funcall make-foobar)))
+
+(deftest test-method-factory-bindings-defaults () ()
+  (is (equal '(:def :def sobj-default another-default)
+             (some-gf :def :def))))
 
 (deftest test-value-injection () ()
   (let ((injector (make-injector
@@ -467,7 +534,4 @@
       (map2 (:map abc (:value 4242)
                   def (:factory #'(lambda () (cons 15 16)))))))))
 
-;; TBD: test injection defaults for initargs (incl. :default-initargs) / keyword arguments (for cases when there's no injector)
-;; Make sure (INJECT ...) form signals an error (of specific class) if there's no current injector
-;; (this must be handled by INJECTED clas and /INJECTED macrology)
 ;; TBD: thread-local scope & scope extensibility (export symbols)
