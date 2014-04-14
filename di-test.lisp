@@ -23,6 +23,9 @@
                     :to 'some-injected
                     :scope :singleton)
        (config-bind binder 'another
+                    :to 'some-injected)
+       ;; override
+       (config-bind binder 'another
                     :to 'injected-foobar
                     :scope :singleton))))
 
@@ -138,6 +141,8 @@
   (let ((injector (make-injector
                    #'(lambda (binder)
                        (config-bind binder 'some-injected :to-value 42)
+                       (config-bind binder 'another :to-value "aaa")
+                       ;; override
                        (config-bind binder 'another :to-value "qqq")))))
     (is (equal (list 1 2 42 "qqq")
                (some-injected-func 1 2 :injector injector)))
@@ -442,7 +447,6 @@
       (map2 (:map abc (:value 4242)
                   def (:factory #'(lambda () (cons 15 16)))))))))
 
-;; TBD: test overriding config-bind
 ;; TBD: don't do initform injection, parse (c2mop:class-default-initargs class) instead
 ;; (look for second values). (inject key [default]) should return default if it's present
 ;; in case it's actually run, or throw an error if it's run and there's no default specified
