@@ -16,8 +16,10 @@
   (:documentation "The Injector"))
 
 (defmethod initialize-instance :after ((injector injector) &key config &allow-other-keys)
-  (bind-value (binder injector) '(:scope :no-scope) (make-instance 'null-scope))
-  (bind-value (binder injector) '(:scope :singleton) (make-instance 'singleton-scope))
+  (config-bind (binder injector) '(:scope :no-scope)
+               :to-value (make-instance 'null-scope))
+  (config-bind (binder injector) '(:scope :singleton)
+               :to-value (make-instance 'singleton-scope))
   (dolist (item (flatten (ensure-list config)))
     (configure (binder injector) item)))
 
@@ -36,157 +38,170 @@
 
 ;;; scope
 
-(defgeneric scope-get (scope key provider))
+(defgeneric scope-get (scope key factory))
 
 (defclass null-scope () ())
 
-(defmethod scope-get ((scope null-scope) key provider)
+(defmethod scope-get ((scope null-scope) key factory)
   (declare (ignore key))
-  (funcall provider))
+  (when factory
+    (funcall factory)))
 
 (defclass singleton-scope ()
   ((instances :reader instances :initform (make-hash-table :test #'equal))))
 
-(defmethod scope-get ((scope singleton-scope) key provider)
+(defmethod scope-get ((scope singleton-scope) key factory)
   (or (gethash key (instances scope))
-      (when provider
+      (when factory
         (setf (gethash key (instances scope))
-              (funcall provider)))))
+              (funcall factory)))))
 
 ;; TBD: thread-local scope
 
 ;;; bindings
 
-(defgeneric binding-provider (binding injector))
+(defstruct (binding
+            (:type list)
+            (:constructor make-binding (provider scope)))
+  provider scope)
 
-(defgeneric binding-add-child (binding child-binding)
-  (:method ((binding t) (child-binding t))
-    (error "can't multibind a single binding")))
+(defgeneric provider-factory-function (provider injector))
 
-(defgeneric binding-scope (binding))
+(defgeneric provider-add-child (provider child-provider)
+  (:method ((provider t) (child-provider t))
+    (error "can't add child to a non-sequence provider")))
 
-(defclass injector-binding ()
-  ((scope :reader binding-scope :initarg :scope :initform :no-scope)))
+;;; provider (marker class)
 
-;;; class-binding
+(defclass provider () ())
 
-(defclass class-binding (injector-binding)
+;;; class-provider
+
+(defclass class-provider (provider)
   ((class-name :reader class-name :initarg :class-name)
-   (initargs :reader initargs :initarg :initargs)
-   (recursive-p :reader recursive-p :initarg :recursive-p
-                :initform t)))
+   (wrapped-initargs :accessor wrapped-initargs)))
 
-(defun inject-initargs (injector initargs)
-  (iter (for (name value . nil) on initargs by #'cddr)
-        (collect name)
-        (collect
-            (cond ((not (proper-list-p value)) value)
-                  (t (case (first value)
-                       (:value (second value))
-                       (:inject (obtain injector (second value)))
-                       (:instance
-                        (apply (provider injector (second value))
-                               (inject-initargs injector (rest (rest value)))))))))))
+(defun wrap-initargs (initargs)
+  (iter (while initargs)
+        (for item = (pop initargs))
+        (cond ((consp item)
+               (appending item into injected-initargs))
+              (t
+               (collect item into plain-initargs)
+               (collect (pop initargs) into plain-initargs)))
+        (finally
+         (let ((providers
+          (iter (for (name value . nil) on injected-initargs by #'cddr)
+                (collect (cons name (auto-provider value))))))
+           (return #'(lambda (injector)
+                       (append
+                        plain-initargs
+                        (iter (for (name . provider) in providers)
+                              (collect name)
+                              (collect (funcall (provider-factory-function provider injector)))))))))))
 
-(defmethod binding-provider ((binding class-binding) (injector injector))
+(defmethod initialize-instance :after ((provider class-provider) &key initargs &allow-other-keys)
+  (setf (wrapped-initargs provider) (wrap-initargs initargs)))
+
+(defmethod provider-factory-function ((provider class-provider) (injector injector))
   #'(lambda (&rest initargs)
-      (let ((merged-initargs
-              (append initargs
-                      (inject-initargs
-                       injector
-                       (apply #'remove-from-plist
-                              (initargs binding)
-                              (mapcar #'car (plist-alist initargs)))))))
-        (or (when (recursive-p binding)
-              ;; set allow-auto-p to nil so we only get non-null value
-              ;; when explicit binding exists for the class-name
-              (obtain injector (class-name binding) nil))
-            (make-instance-for-injector
-             injector
-             (class-name binding)
-             merged-initargs)))))
+      (make-instance-for-injector
+       injector
+       (class-name provider)
+       (append initargs
+               (apply #'remove-from-plist
+                      (funcall (wrapped-initargs provider) injector)
+                      (mapcar #'car (plist-alist initargs)))))))
 
-;;; value-binding
+;;; value-provider
 
-(defclass value-binding (injector-binding)
+(defclass value-provider (provider)
   ((value :reader value :initarg :value)))
 
-(defmethod binding-provider ((binding value-binding) (injector injector))
-  #'(lambda () (value binding)))
+(defmethod provider-factory-function ((provider value-provider) (injector injector))
+  #'(lambda () (value provider)))
 
 ;;; factory-binding
 
-(defclass factory-binding (injector-binding)
+(defclass factory-provider (provider)
   ((factory :reader factory :initarg :factory)))
 
-(defmethod binding-provider ((binding factory-binding) (injector injector))
-  #'(lambda () (funcall (factory binding))))
+(defmethod provider-factory-function ((provider factory-provider) (injector injector))
+  (factory provider))
 
-;;; multibinding
+;;; sequence-provider
 
-(defclass multibinding (injector-binding)
-  ((child-bindings :accessor child-bindings :initform '())))
+(defclass sequence-provider (provider)
+  ((children :accessor children :initform '())))
 
-(defmethod binding-provider ((binding multibinding) (injector injector))
-  (let ((providers (mapcar (rcurry #'binding-provider injector)
-                           (reverse (child-bindings binding)))))
-    #'(lambda () (mapcar #'funcall providers))))
+(defmethod provider-factory-function ((provider sequence-provider) (injector injector))
+  (let ((factory-fns (mapcar (rcurry #'provider-factory-function injector)
+                             (reverse (children provider)))))
+    #'(lambda () (mapcar #'funcall factory-fns))))
 
-(defmethod binding-add-child ((binding multibinding) child-binding)
-  (push child-binding (child-bindings binding)))
+(defmethod provider-add-child ((provider sequence-provider) child-provider)
+  (push child-provider (children provider)))
 
-;;; binding setup functions
+;;; recursive-provider
 
-(defun bind-class (binder key provider &optional (scope :no-scope))
-  ;; TBD: make sure the injector wasn't configured yet
-  (setf provider (ensure-list provider))
+(defclass recursive-provider (provider)
+  ((key :accessor key :initarg :key
+        :initform (error "must specify the key for RECURSIVE-PROVIDER"))))
+
+(defmethod provider-factory-function ((provider recursive-provider) (injector injector))
+  #'(lambda () (obtain injector (key provider))))
+
+;;; provider constructors
+
+(defun make-class-provider (class-name &optional initargs)
+  (make-instance 'class-provider
+                 :class-name class-name
+                 :initargs initargs))
+
+(defun make-value-provider (value)
+  (make-instance 'value-provider :value value))
+
+(defun make-factory-provider (factory)
+  (make-instance 'factory-provider :factory factory))
+
+(defun make-recursive-provider (key)
+  (make-instance 'recursive-provider :key key))
+
+;;; binder configuration
+
+(defun auto-provider (value)
+  (match value
+    ((type provider) value)
+    ((or nil t) (error "invalid binding value ~s" value))
+    ((type symbol) (make-class-provider value))
+    ((list :key key) (make-recursive-provider key))
+    ((list* (guard class-name (symbolp class-name)) initargs)
+     (make-class-provider class-name initargs))
+    ((type function) (make-factory-provider value))))
+
+(defun config-bind (binder key &key to to-value (scope :no-scope))
+  (assert (or to to-value) ()
+          "CONFIG-BIND: must specify either :TO or :TO-VALUE")
+  (assert (or (not to) (not to-value)) ()
+          "CONFIG-BIND: cannot specify both :TO and :TO-VALUE")
   (setf (binder-get binder key)
-        (make-instance 'class-binding
-                       :class-name (first provider)
-                       :initargs (rest provider)
-                       ;; avoid endless recursion
-                       :recursive-p (not (eq key (first provider)))
-                       :scope scope)))
+        (make-binding
+         (if to-value (make-value-provider to-value) (auto-provider to))
+         scope)))
 
-(defun bind-value (binder key value)
-  (setf (binder-get binder key)
-        (make-instance 'value-binding
-                       :value value)))
-
-(defun bind-factory (binder key factory &optional (scope :no-scope))
-  (setf (binder-get binder key)
-        (make-instance 'factory-binding
-                       :factory factory
-                       :scope scope)))
-
-(defun ensure-multibinding (binder key scope)
-  (or (binder-get binder key)
-      (setf (binder-get binder key)
-            (make-instance 'multibinding
-                           :scope scope))))
-
-(defun bind-empty* (binder key &optional (scope :no-scope))
-  (ensure-multibinding binder key scope))
-
-(defun bind-class* (binder key provider &optional (scope :no-scope))
-  (setf provider (ensure-list provider))
-  (binding-add-child
-   (ensure-multibinding binder key scope)
-   (make-instance 'class-binding
-                  :class-name (first provider)
-                  :initargs (rest provider))))
-
-(defun bind-value* (binder key value &optional (scope :no-scope))
-  (binding-add-child
-   (ensure-multibinding binder key scope)
-   (make-instance 'value-binding
-                  :value value)))
-
-(defun bind-factory* (binder key factory &optional (scope :no-scope))
-  (binding-add-child
-   (ensure-multibinding binder key scope)
-   (make-instance 'factory-binding
-                  :factory factory)))
+(defun config-multibind (binder key &key (to nil to-p) (to-value nil to-value-p) (scope :no-scope))
+  (cond ((not (binder-get binder key))
+         (setf (binder-get binder key)
+               (make-binding (make-instance 'sequence-provider) scope)))
+        ((not (typep (binding-provider (binder-get binder key))
+                     'sequence-provider))
+         (error "trying to use CONFIG-MULTIBIND with key that was ~
+                 previously used with CONFIG-BIND")))
+  (when (or to-p to-value-p)
+    (provider-add-child (binding-provider (binder-get binder key))
+                        (if to-value
+                            (make-value-provider to-value)
+                            (auto-provider to)))))
 
 ;;; injector stuff
 
@@ -196,33 +211,33 @@
 (defun normalize-lambda-list-item (item)
   (cond ((not (symbolp item)) item)
         ((string= (string-upcase item) "&INJECT") '&inject)
-        ((string= (string-upcase item) "&PROVIDE") '&provide)
+        ((string= (string-upcase item) "&FACTORY") '&factory)
         (t item)))
 
 (defun split-injected-lambda-list (lambda-list)
   (setf lambda-list (mapcar #'normalize-lambda-list-item lambda-list))
   (let ((state :plain))
     (assert (<= (count '&inject lambda-list) 1) () "duplicate &inject")
-    (assert (<= (count '&provide lambda-list) 1) () "duplicate &provide")
+    (assert (<= (count '&factory lambda-list) 1) () "duplicate &factory")
     (iter (for item in lambda-list)
           (case state
             (:plain
              (case item
                (&inject
                 (setf state :inject))
-               (&provide
-                (setf state :provider))
+               (&factory
+                (setf state :factory))
                (t
                 (collect item into plain))))
             (:inject
              (cond ((member item lambda-list-keywords)
                     (collect item into plain)
                     (setf state :plain))
-                   ((eq item '&provide)
-                    (setf state :provider))
+                   ((eq item '&factory)
+                    (setf state :factory))
                    (t
                     (collect item into inject))))
-            (:provider
+            (:factory
              (cond ((member item lambda-list-keywords)
                     (collect item into plain)
                     (setf state :plain))
@@ -240,8 +255,8 @@
     (when allow-inject-p
       (when (typep init '(cons (eql :inject) (cons symbol null)))
         (setf init `(obtain injector ',(second init))))
-      (when (typep init '(cons (eql :provider) (cons symbol null)))
-        (setf init `(provider injector ',(second init)))))
+      (when (typep init '(cons (eql :factory) (cons symbol null)))
+        (setf init `(get-factory injector ',(second init)))))
     (cond (supplied-p
            (list name init supplied-p))
           (init
@@ -250,7 +265,7 @@
            name))))
 
 (defun expand-injected (lambda-list body &key allow-specializers)
-  (multiple-value-bind (plain inject provider)
+  (multiple-value-bind (plain inject factory)
       (split-injected-lambda-list lambda-list)
     (multiple-value-bind (required optional rest keyargs allow-other-keys-p aux)
         (parse-ordinary-lambda-list plain :allow-specializers allow-specializers)
@@ -264,12 +279,12 @@
         (mapcar (rcurry #'injected-opt-arg t) keyargs)
         (when allow-other-keys-p '(&allow-other-keys))
         (when aux (cons '&aux aux)))
-        (if (or inject provider)
+        (if (or inject factory)
             `((let ,(append
                      (iter (for (name key) in inject)
                            (collect `(,name (obtain injector ',key))))
-                     (iter (for (name key) in provider)
-                           (collect `(,name (provider injector ',key)))))
+                     (iter (for (name key) in factory)
+                           (collect `(,name (get-factory injector ',key)))))
                 ,@body))
             body)))))
 
@@ -332,11 +347,13 @@
     (inject-slot-initargs injector injected slot-names)
     (call-next-method)))
 
-(defun %provider-and-scope (base-instance key &optional (allow-auto-p t))
+(defun %factory-and-scope (base-instance key &optional (allow-auto-p t))
   (let* ((injector (injector base-instance))
          (binding (binder-get (binder injector) key)))
     (cond (binding
-           (values (binding-provider binding injector)
+           (values (provider-factory-function
+                    (binding-provider binding)
+                     injector)
                    (binding-scope binding)))
           ((not allow-auto-p) (values nil nil))
           ((and key (symbolp key)
@@ -348,73 +365,72 @@
           (t
            (error "no binding or class found for injection key ~s" key)))))
 
-(defun provider (base-instance key &optional (allow-auto-p t))
-  (values (%provider-and-scope base-instance key allow-auto-p)))
+(defun get-factory (base-instance key &optional (allow-auto-p t))
+  (values (%factory-and-scope base-instance key allow-auto-p)))
 
 (defun obtain (base-instance key &optional (allow-auto-p t))
   (let ((injector (injector base-instance)))
-    (multiple-value-bind (provider scope)
-        (%provider-and-scope injector key allow-auto-p)
-      (when provider
-        (let ((scope-provider (provider injector (list :scope scope))))
-          (scope-get (funcall scope-provider) key provider))))))
+    (multiple-value-bind (factory scope)
+        (%factory-and-scope injector key allow-auto-p)
+      (when factory
+        (let ((scope-factory (get-factory injector (list :scope scope))))
+          (scope-get (funcall scope-factory) key factory))))))
 
 ;;; defmodule / declarative-bindings
 
-(defun expand-provider-spec (provider-spec)
-  (assert (match provider-spec
-            ((or (type symbol)
-                 (guard (list* (type symbol) initargs)
-                        (and (proper-list-p initargs)
-                             (zerop (mod (length initargs) 2)))))
-             t))
-          ()
-          "invalid provider spec ~s" provider-spec)
-  (setf provider-spec (ensure-list provider-spec))
-  `(list ',(first provider-spec)
-         ,@(iter (for (name value . nil) on (rest provider-spec) by #'cddr)
-                 (collect name)
-                 (collect
-                     (match value
-                       ((list :inject v) `(quote (:inject ,v)))
-                       ((list :value v) `(list :value ,v))
-                       (v v))))))
+(defun expand-provider-initargs (initargs)
+  (iter (while initargs)
+        (for item = (pop initargs))
+        (cond ((consp item)
+               (appending item into injected-initargs))
+              (t
+               (collect item into plain-initargs)
+               (collect (pop initargs) into plain-initargs)))
+        (finally
+         (return
+           (if (or injected-initargs plain-initargs)
+               `(list ,@(when injected-initargs `((quote ,injected-initargs)))
+                      ,@plain-initargs)
+               '())))))
+
+(defun expand-provider-spec (binder-var key provider-spec
+                             &optional (scope :no-scope) (bind-fn 'config-bind))
+  (match provider-spec
+    ((list :value value)
+     `(,bind-fn ,binder-var ',key :to-value ,value :scope ',scope))
+    ((list :key recursive-key)
+     `(,bind-fn ,binder-var ',key
+                :to (make-recursive-provider ',recursive-key)
+                :scope ',scope))
+    ((list :seq)
+     (assert (eq 'config-bind bind-fn) () "bad (:SEQ ...) binding")
+     `(config-multibind ,binder-var ',key :scope ',scope))
+    ((list :seq pspec)
+     (assert (eq 'config-bind bind-fn) () "bad (:SEQ ...) binding")
+     (expand-provider-spec binder-var key (ensure-list pspec)
+                           scope 'config-multibind))
+    ((list :factory expr)
+     `(,bind-fn ,binder-var ',key :to ,expr :scope ',scope))
+    ((list* (guard class-name (case class-name
+                                ((nil t) nil)
+                                (t (and (symbolp class-name)
+                                        (not (keywordp class-name))))))
+            initargs)
+     `(,bind-fn ,binder-var ',key
+                :to (make-class-provider
+                     ',class-name
+                     ,(expand-provider-initargs initargs))
+                :scope ',scope))
+    (_
+     (error "invalid provider spec: ~s" provider-spec))))
 
 (defun expand-binding (binder-var binding-spec)
   (match binding-spec
-    ((list := key value)
-     `(bind-value ,binder-var ',key ,value))
-    ((or (list (or :* :+ :!+) key)
-         (list (or :* :+ :!+) key (list :none))
-         (list (or :* :+ :!+) key (list :none) scope))
-     `(bind-empty* ,binder-var ',key ,(or scope :no-scope)))
-    ((or (list :* key value)
-         (list :* key value scope))
-     `(bind-value* ,binder-var ',key ,value ,(or scope :no-scope)))
-    ((or (list :+ key provider-spec)
-         (list :+ key provider-spec scope))
-     `(bind-class* ,binder-var
-                   ',key
-                   ,(expand-provider-spec provider-spec)
-                   ,(or scope :no-scope)))
-    ((or (list :! key function)
-         (list :! key function scope))
-     `(bind-factory ,binder-var
-                    ',key
-                    ,function
-                    ,(or scope :no-scope)))
-    ((or (list :!+ key function)
-         (list :!+ key function scope))
-     `(bind-factory* ,binder-var
-                     ',key
-                     ,function
-                     ,(or scope :no-scope)))
     ((or (list key provider-spec)
          (list key provider-spec scope))
-     `(bind-class ,binder-var
-                  ',key
-                  ,(expand-provider-spec provider-spec)
-                  ,(or scope :no-scope)))
+     (expand-provider-spec binder-var key
+                           (ensure-list provider-spec)
+                           (or scope :no-scope)))
     (_ (error "invalid binding spec: ~s" binding-spec))))
 
 (defmacro defmodule (name (&rest supers) &body bindings)

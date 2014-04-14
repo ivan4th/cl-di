@@ -8,17 +8,17 @@
            #:inject
            #:injected
            #:configure
-           #:bind-class
-           #:bind-class*
-           #:bind-value
-           #:bind-value*
-           #:bind-factory
-           #:bind-factory*
-           #:bind-empty*
+           #:config-bind
+           #:config-multibind
+           #:provider
+           #:make-class-provider
+           #:make-value-provider
+           #:make-factory-provider
+           #:make-recursive-provider
            #:module
            #:defun/injected
            #:defmethod/injected
            #:obtain
-           #:provider
+           #:get-factory
            #:defmodule
            #:declarative-bindings))
