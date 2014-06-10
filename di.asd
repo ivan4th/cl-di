@@ -1,5 +1,5 @@
 (asdf:defsystem #:di
-  :name "cl-di"
+  :name "di"
   :author "Ivan Shvedunov"
   :version "0.1"
   :serial t

@@ -82,6 +82,12 @@
     (is-true (typep (misc-foo (obtain injector 'injected-foobar))
                     'some-barfoo))))
 
+;; TBD: (:via ...) args, like this
+#++
+(defun/injected some-injected-func ((:via abc) def &inject (sobj some-injected)
+                                        &key (foobar (:inject another)))
+  (list abc def sobj foobar))
+
 (defun/injected some-injected-func (abc def &inject (sobj some-injected)
                                         &key (foobar (:inject another)))
   (list abc def sobj foobar))
@@ -167,7 +173,7 @@
 
 (defun/injected func-with-factory (abc def &factory (make-sobj some-injected)
                                        &key (make-foobar (:factory another)))
-  (list abc def (funcall make-sobj) (funcall make-foobar)))
+  (list abc def (make-sobj) (funcall make-foobar)))
 
 (deftest test-func-factory-bindings () ()
   (let* ((injector (make-injector
@@ -187,7 +193,7 @@
     (abc def
          &factory (make-sobj some-injected #'(lambda () 'sobj-default))
          &key (make-foobar (:factory another #'(lambda () 'another-default))))
-  (list abc def (funcall make-sobj) (funcall make-foobar)))
+  (list abc def (make-sobj) (funcall make-foobar)))
 
 (deftest test-func-factory-defaults () ()
   (is (equal '(1 2 sobj-default another-default)
@@ -196,7 +202,7 @@
 (defmethod/injected some-gf ((abc symbol) (def symbol)
                              &factory (make-sobj some-injected)
                              &key (make-foobar (:factory another)))
-  (list abc def (funcall make-sobj) (funcall make-foobar)))
+  (list abc def (make-sobj) (funcall make-foobar)))
 
 (deftest test-method-factory-bindings () ()
   (let* ((injector (make-injector
@@ -215,7 +221,7 @@
 (defmethod/injected some-gf ((abc (eql :def)) (def (eql :def))
                              &factory (make-sobj some-injected #'(lambda () 'sobj-default))
                              &key (make-foobar (:factory another #'(lambda () 'another-default))))
-  (list abc def (funcall make-sobj) (funcall make-foobar)))
+  (list abc def (make-sobj) (funcall make-foobar)))
 
 (deftest test-method-factory-bindings-defaults () ()
   (is (equal '(:def :def sobj-default another-default)

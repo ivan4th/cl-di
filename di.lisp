@@ -291,9 +291,9 @@
                    ((eq item '&inject)
                     (setf state :inject))
                    (t
-                    (collect item into provide)))))
+                    (collect item into factories)))))
           (finally
-           (return (values plain inject provide))))))
+           (return (values plain inject factories))))))
 
 (defun injected-opt-arg (arg &optional allow-inject-p)
   (destructuring-bind (name init supplied-p) arg
@@ -316,16 +316,26 @@
           (t
            name))))
 
-;; expand &inject and &factory items
-(defun special-arg-let-bindings (args obtain-func)
+(defun special-arg-let-bindings (args obtain-func &optional funcs-p)
   (iter (for item in args)
         (destructuring-bind (name key &optional (default nil default-p))
             (ensure-list item)
-          (collect `(,name (%get/default
-                               via ',key
-                               ,obtain-func
-                               ,@(when default-p (list default))))))))
+          (let ((actual-name
+                  (if funcs-p
+                      (let ((var-name (gensym (symbol-name name))))
+                        (with-gensyms (args)
+                          (collect `(,name (&rest ,args) (apply ,var-name ,args))
+                            into func-bindings))
+                        var-name)
+                      name)))
+            (collect `(,actual-name (%get/default
+                                        via ',key
+                                        ,obtain-func
+                                        ,@(when default-p (list default))))
+              into bindings)))
+        (finally (return (values bindings func-bindings)))))
 
+;; expand &inject and &factory items
 (defun expand-injected (lambda-list body &key allow-specializers)
   (multiple-value-bind (plain inject factory)
       (split-injected-lambda-list lambda-list)
@@ -341,12 +351,16 @@
         (mapcar (rcurry #'injected-opt-arg t) keyargs)
         (when allow-other-keys-p '(&allow-other-keys))
         (when aux (cons '&aux aux)))
-        (if (or inject factory)
-            `((let ,(append
-                     (special-arg-let-bindings inject 'obtain)
-                     (special-arg-let-bindings factory 'get-factory))
-                ,@body))
-            body)))))
+       (if (null (or inject factory))
+           body
+           (multiple-value-bind (factory-bindings flet-bindings)
+               (special-arg-let-bindings factory 'get-factory t)
+             `((let ,(append
+                      (special-arg-let-bindings inject 'obtain)
+                      factory-bindings)
+                 ,@(if flet-bindings
+                       `((flet ,flet-bindings ,@body))
+                       body)))))))))
 
 (defmacro defun/injected (name lambda-list &body body)
   `(defun ,name ,@(expand-injected lambda-list body)))
