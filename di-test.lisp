@@ -173,18 +173,26 @@
 
 (defun/injected func-with-factory (abc def &factory (make-sobj some-injected)
                                        &key (make-foobar (:factory another)))
-  (list abc def (make-sobj) (funcall make-foobar)))
+  (list abc def (make-sobj :whatever "factory-initarg") (funcall make-foobar)))
 
 (deftest test-func-factory-bindings () ()
   (let* ((injector (make-injector
                     #'(lambda (binder)
-                        (config-bind binder 'some :to 'some-injected)
+                        (config-bind binder 'some
+                                     :to 'some-injected
+                                     ;; the scope is not used by factories
+                                     :scope :singleton)
                         (config-bind binder 'another :to 'injected-foobar))))
          (l (func-with-factory 1 2 :via injector)))
     (is (= 1 (first l)))
     (is (= 2 (second l)))
     (is-true (typep (third l) 'some-injected))
-    (is-true (typep (fourth l) 'injected-foobar))))
+    (is-true (typep (fourth l) 'injected-foobar))
+    (is (equal "factory-initarg" (whatever (third l))))
+    ;; despite :singleton scope, the factory returns a new instance
+    (let ((new-l (func-with-factory 1 2 :via injector)))
+      (is (equal "factory-initarg" (whatever (third new-l))))
+      (is (not (eq (third l) (third new-l)))))))
 
 (deftest test-func-factory-nodefault () ()
   (signals injection-error (func-with-factory 1 2)))
