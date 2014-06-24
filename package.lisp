@@ -8,6 +8,7 @@
            #:binder
            #:inject
            #:injected
+           #:singleton-mixin
            #:configure
            #:config-bind
            #:config-multibind

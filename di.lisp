@@ -58,14 +58,21 @@
         (setf (gethash key (instances scope))
               (funcall factory)))))
 
+(defclass singleton-mixin ()
+  ()
+  (:default-initargs :scope :singleton))
+
 ;; TBD: thread-local scope
 
 ;;; bindings
 
 (defstruct (binding
             (:type list)
-            (:constructor make-binding (provider scope)))
+            (:constructor %make-binding (provider scope)))
   provider scope)
+
+(defun make-binding (provider scope)
+  (%make-binding provider (or scope (provider-scope provider))))
 
 (defgeneric provider-factory-function (provider injector))
 
@@ -76,6 +83,9 @@
 (defgeneric provider-add-key (provider key child-provider)
   (:method ((provider t) (key t) (child-provider t))
     (error "can't add key to a non-mapping provider")))
+
+(defgeneric provider-scope (provider)
+  (:method ((provider t)) :no-scope))
 
 ;;; provider (marker class)
 
@@ -118,6 +128,9 @@
                (apply #'remove-from-plist
                       (funcall (wrapped-initargs provider) injector)
                       (mapcar #'car (plist-alist initargs)))))))
+
+(defmethod provider-scope ((provider class-provider))
+  (class-scope (class-name provider)))
 
 ;;; value-provider
 
@@ -205,7 +218,7 @@
      (make-class-provider class-name initargs))
     ((type function) (make-factory-provider value))))
 
-(defun config-bind (binder key &key to to-value (scope :no-scope))
+(defun config-bind (binder key &key to to-value scope)
   (assert (or to to-value) ()
           "CONFIG-BIND: must specify either :TO or :TO-VALUE")
   (assert (or (not to) (not to-value)) ()
@@ -215,7 +228,7 @@
          (if to-value (make-value-provider to-value) (auto-provider to))
          scope)))
 
-(defun config-multibind (binder key &key (to nil to-p) (to-value nil to-value-p) (scope :no-scope))
+(defun config-multibind (binder key &key (to nil to-p) (to-value nil to-value-p) scope)
   (cond ((not (binder-get binder key))
          (setf (binder-get binder key)
                (make-binding (make-instance 'sequence-provider) scope)))
@@ -233,7 +246,7 @@
                        &key (map-key nil map-key-p)
                          (to nil to-p)
                          (to-value nil to-value-p)
-                         (scope :no-scope))
+                         scope)
   (cond ((not (binder-get binder key))
          (setf (binder-get binder key)
                (make-binding (make-instance 'mapping-provider) scope)))
@@ -382,8 +395,39 @@
     :accessor injector
     :initarg :via
     :initform nil
-    :documentation "Injector instance"))
+    :documentation "Injector instance")
+   (scope
+    :accessor scope
+    :initarg :scope
+    :documentation "Default scope for the class"))
   (:documentation "Base class for classes utilizing DI"))
+
+(defun class-slot-value (class slot-name &optional (default nil default-p))
+  (when (symbolp class)
+    (setf class (find-class class)))
+  (c2mop:ensure-finalized class)
+  (let ((slotd (find slot-name (c2mop:class-slots class)
+                     :key #'c2mop:slot-definition-name)))
+    (cond ((and (not slotd) (not default-p))
+           (error "no such slot ~s in class ~s" slot-name class))
+          ((not slotd) default)
+          (t
+           (let ((slot-initargs (c2mop:slot-definition-initargs slotd))
+                 (class-initargs (c2mop:class-default-initargs class)))
+             (iter (for initarg in slot-initargs)
+                   (when-let ((initarg-func (third (find initarg class-initargs :key #'first))))
+                     (return (funcall initarg-func)))
+                   (finally
+                    (let ((initfunction (c2mop:slot-definition-initfunction slotd)))
+                      (return
+                        (cond (initfunction
+                               (return (funcall initfunction)))
+                              (default-p default)
+                              (t
+                               (error "can't get value of slot ~s in class ~s" slot-name class))))))))))))
+
+(defun class-scope (class)
+  (class-slot-value class 'scope :no-scope))
 
 (defvar *inject-catch-nodefault* nil)
 
@@ -448,7 +492,7 @@
     (cond (binding
            (values (provider-factory-function
                     (binding-provider binding)
-                     injector)
+                    injector)
                    (binding-scope binding)))
           ((not allow-auto-p) (values nil nil))
           ((and key (symbolp key)
@@ -456,7 +500,7 @@
            (values
             #'(lambda (&rest initargs)
                 (make-instance-for-injector injector key initargs))
-            :no-scope))
+            (class-scope key)))
           (t
            (error "no binding or class found for injection key ~s" key)))))
 
@@ -499,7 +543,7 @@
                '())))))
 
 (defun expand-provider-spec (binder-var key provider-spec
-                             &optional (scope :no-scope) (bind-fn 'config-bind)
+                             &optional scope (bind-fn 'config-bind)
                                (map-key nil map-key-p))
   ;; TBD: ,@(when map-key-p `(:map-key ',map-key)) everywhere, use flet
   (flet ((bind-call (&rest args)
@@ -550,7 +594,7 @@
          (list key provider-spec scope))
      (expand-provider-spec binder-var key
                            (ensure-list provider-spec)
-                           (or scope :no-scope)))
+                           scope))
     (_ (error "invalid binding spec: ~s" binding-spec))))
 
 (defmacro defmodule (name (&rest supers) &body bindings)

@@ -548,4 +548,23 @@
       (map2 (:map abc (:value 4242)
                   def (:factory #'(lambda () (cons 15 16)))))))))
 
+(defclass singleton-object (di:singleton-mixin di:injected) ())
+(defclass singleton-object-1 (di:injected) ((di::scope :initform :singleton)))
+(defclass singleton-object-2 (di:injected)
+  ()
+  (:default-initargs :scope :singleton))
+(defclass singleton-object-3 (di:injected di:singleton-mixin) ())
+
+(deftest test-scope () ()
+  (let ((injector (make-injector
+                   #'(lambda (binder)
+                       (config-bind binder :singleton-object-3
+                                    :to 'singleton-object-3)))))
+    (dolist (class-name '(singleton-object singleton-object-1 singleton-object-2
+                          singleton-object-3))
+      (let ((o (obtain injector class-name)))
+        (is (eq o (obtain injector class-name))
+            "~s expected to be a singleton" class-name)))))
+
+;; TBD: inject-instance
 ;; TBD: thread-local scope & scope extensibility (export symbols)
