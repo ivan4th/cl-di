@@ -60,16 +60,12 @@
 (defclass foobar3 (injected)
   ((another :accessor another
             :initform (error "no :ANOTHER specified")
-            :initarg :another)
-   (misc :accessor misc
-         :initform (inject 'misc 'misc-default)
-         :initarg :misc))
+            :initarg :another))
   (:default-initargs :another (inject 'another 'another-default)))
 
 (deftest test-inject-defaults () ()
   (let ((foobar3 (make-instance 'foobar3)))
-    (is (eq 'another-default (another foobar3)))
-    (is (eq 'misc-default (misc foobar3)))))
+    (is (eq 'another-default (another foobar3)))))
 
 (deftest test-inject-nodefault () ()
   (signals injection-error (make-instance 'some-injected))
@@ -164,12 +160,14 @@
                         (config-bind  binder 'another :to 'injected-foobar))))
          (provide-some (get-factory injector 'some))
          (provide-some-injected (get-factory injector 'some-injected))
-         (obj (funcall provide-some)))
+         (obj (funcall provide-some))
+         (factory-via-obj (get-factory obj 'some)))
     (is-true (typep obj 'some-injected))
     (is-true (typep (funcall provide-some) 'some-injected))
     (is-true (typep (another obj) 'injected-foobar))
     (is (not (equal obj (funcall provide-some))))
-    (is-true (typep (funcall provide-some-injected) 'some-injected))))
+    (is-true (typep (funcall provide-some-injected) 'some-injected))
+    (is-true (typep (funcall factory-via-obj) 'some-injected))))
 
 (defun/injected func-with-factory (abc def &factory (make-sobj some-injected)
                                        &key (make-foobar (:factory another)))
@@ -566,5 +564,16 @@
         (is (eq o (obtain injector class-name))
             "~s expected to be a singleton" class-name)))))
 
-;; TBD: inject-instance
+(defclass injected-misc (injected)
+  ((another :accessor another :initarg :another)
+   (whatever :accessor whatever :initarg :whatever)))
+
+(deftest test-inject-instance () ()
+  (let ((injector (make-injector #'(lambda (binder)
+                                     (config-bind binder :another :to 'injected-foobar))))
+        (misc (make-instance 'injected-misc)))
+    (inject-instance misc :whatever 42 :via injector)
+    (is-true (typep (another misc) 'injected-foobar))
+    (is (= 42 (whatever misc)))))
+
 ;; TBD: thread-local scope & scope extensibility (export symbols)

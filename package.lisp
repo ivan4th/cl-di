@@ -21,6 +21,7 @@
            #:module
            #:defun/injected
            #:defmethod/injected
+           #:inject-instance
            #:obtain
            #:get-factory
            #:defmodule

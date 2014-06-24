@@ -430,6 +430,9 @@
   (class-slot-value class 'scope :no-scope))
 
 (defvar *inject-catch-nodefault* nil)
+(defstruct (injected-value
+            (:constructor make-injected-value (value)))
+  value)
 
 (defun make-instance-for-injector (injector class-spec initargs)
   ;; skip :via initarg for non-injected classes
@@ -439,33 +442,36 @@
 
 (defun inject (key &optional (default nil default-p) (catch-nodefault *inject-catch-nodefault*))
   (declare (ignore key))
-  (cond (default-p default)
-        (catch-nodefault
-         (error 'injection-error :format-control "injector required"))
-        (t nil)))
+  (make-injected-value
+   (cond (default-p default)
+         (catch-nodefault
+          (error 'injection-error :format-control "injector required"))
+         (t nil))))
 
 (defun inject-form-key (form)
   (match form
-    ((list 'inject (list 'quote key)) key)
+    ((list* 'inject (list 'quote key) _) key)
     (_ nil)))
 
-(defun inject-default-initargs (injector instance)
+(defun inject-default-initargs (injector instance skip-initargs)
   (iter (for (initarg value function) in
          (c2mop:class-default-initargs (class-of instance)))
-        (when-let ((key (inject-form-key value)))
-          (if injector
-              (collect (cons initarg (obtain injector key)))
-              (let ((*inject-catch-nodefault* t))
-                (funcall function))))))
+        (unless (member initarg skip-initargs)
+          (when-let ((key (inject-form-key value)))
+            (if injector
+                (collect (cons initarg (obtain injector key)))
+                (let ((*inject-catch-nodefault* t))
+                  (funcall function)))))))
 
-(defun inject-slot-initargs (injector instance slot-names)
+(defun inject-slot-initargs (injector instance slot-names skip-initargs)
   (iter (for slotd in (c2mop:class-slots (class-of instance)))
         (let ((slot-name (c2mop:slot-definition-name slotd)))
           (when (or (eq t slot-names)
                     (member slot-name slot-names))
             (let ((targets (iter (for initarg in (c2mop:slot-definition-initargs slotd))
-                                 (when-let ((injected-instance (obtain injector initarg nil)))
-                                   (collect injected-instance)))))
+                                 (unless (member initarg skip-initargs)
+                                   (when-let ((injected-instance (obtain injector initarg nil)))
+                                     (collect injected-instance))))))
               (when (rest targets)
                 (warn "ambiguous initarg binding: class ~s slot ~s initargs ~s"
                       (type-of instance)
@@ -475,16 +481,62 @@
                 (collect (cons (first (c2mop:slot-definition-initargs slotd))
                                (first targets)))))))))
 
-(defmethod shared-initialize :around ((instance injected) (slot-names t)
-                                      &rest initargs
-                                      &key via &allow-other-keys)
+(defun split-injected-initargs (initargs)
+  "Unwrap injected initargs from INITARGS plist and return
+  injected and non-injected initargs as two separate values.
+  Skip :VIA initarg."
+  (iter (for (key value) on initargs by #'cddr)
+        (cond ((eq :via key))
+              ((typep value 'injected-value)
+               (collect (cons key (injected-value-value value)) into injected-initargs))
+              (t
+               (collect (cons key value) into plain-initargs)))
+        (finally
+         (return (values injected-initargs plain-initargs)))))
+
+(defun initargs-with-injection (instance slot-names &rest initargs
+                                &key (via nil via-p) &allow-other-keys)
+  ;; Separate injected initargs, i.e. those which are using (inject '... ...) form
+  ;; in their default initargs, from plain initargs. INJECT function supplies
+  ;; wrapped values which are also unwrapped by SPLIT-INJECTED-INITARGS.
+  ;; SPLIT-INJECTED-INITARGS returns two alists as separate values.
+  (multiple-value-bind (injected-initargs plain-initargs)
+      (split-injected-initargs initargs)
+    ;; For non-injected initargs that are directly specified in
+    ;; MAKE-INSTANCE / INJECT-INSTANCE / etc. call, no injection
+    ;; processing should be done in INJECT-SLOT-INITARGS/INJECT-DEFAULT-INITARGS
+    ;; (such processing may involve new object creation).
+    (let* ((skip-initargs (mapcar #'first plain-initargs))
+           ;; obtain injected initargs based on :DEFAULT-INITARGS of the class
+           (injected-default-initargs (inject-default-initargs via instance skip-initargs)))
+      ;; avoid new object creation due to slot initarg based injection
+      ;; for slots that are already injected via default initargs
+      (nconcf skip-initargs (mapcar #'car injected-default-initargs))
+      (alist-plist
+       ;; Delete duplicate initargs that occur *earlier* in the
+       ;; resulting list.
+       (delete-duplicates
+        (append injected-initargs  ; lowest priority for injected-initargs (defaults from INJECT forms)
+                ;; When injector is available, use initarg names specified in the slots
+                ;; for injection.
+                (when via
+                  (inject-slot-initargs via instance slot-names skip-initargs))
+                ;; :DEFAULT-INITARGS-based injection takes precedence over slot-initarg-based injection
+                injected-default-initargs
+                ;; Directly specified initargs are most important
+                plain-initargs
+                ;; Need to pass on :VIA argument to initialize INJECTOR slot
+                (when via-p (list (cons :via (di:injector via)))))
+        :key #'car)))))
+
+(defmethod shared-initialize :around ((instance injected) (slot-names t) &rest initargs)
   (apply #'call-next-method instance slot-names
-         (alist-plist
-          (delete-duplicates
-           (append (when via
-                     (inject-slot-initargs via instance slot-names))
-                   (inject-default-initargs via instance)
-                   (plist-alist initargs))))))
+         (apply #'initargs-with-injection instance slot-names initargs)))
+
+(defun inject-instance (instance &rest initargs)
+  (apply #'reinitialize-instance instance
+         (append
+          (apply #'initargs-with-injection instance t initargs))))
 
 (defun %factory-and-scope (base-instance key &optional (allow-auto-p t))
   (let* ((injector (injector base-instance))
