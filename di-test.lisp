@@ -1,5 +1,5 @@
 (defpackage :di.tests
-  (:use :cl :di :alexandria :vtf :iterate))
+  (:use :cl :alexandria :iterate :di :di.testutils :vtf))
 
 (in-package :di.tests)
 
@@ -575,5 +575,33 @@
     (inject-instance misc :whatever 42 :via injector)
     (is-true (typep (another misc) 'injected-foobar))
     (is (= 42 (whatever misc)))))
+
+(define-fixture sample-injected-fixture (injected-fixture)
+  ((some-injected :accessor some-injected :initarg :some-injected)
+   (another :accessor another :initarg :another)
+   (setup-done-p :accessor setup-done-p :initform nil)))
+
+(defmethod fixture-modules append ((fixture sample-injected-fixture))
+  (list
+   (declarative-bindings
+     (:some-injected some-injected)
+     (:another injected-foobar)
+     (another (:key :another)))))
+
+(defmethod setup/injected ((fixture sample-injected-fixture) &key &allow-other-keys)
+  (is-true (typep (some-injected fixture) 'some-injected))
+  (setf (setup-done-p fixture) t))
+
+(deftest test-injected-fixture (some-injected another setup-done-p) ((fixture sample-injected-fixture))
+  (is-true setup-done-p)
+  (is-true (typep some-injected 'some-injected))
+  (is-true (typep (another some-injected) 'injected-foobar))
+  (is-true (typep another 'injected-foobar))
+  (dolist (new-object (list (build-instance :some-injected :whatever 42)
+                            (build-instance 'some-injected :whatever 42)))
+    (is-true (typep new-object 'some-injected))
+    (is-true (typep (another new-object) 'injected-foobar))
+    (is (= 42 (whatever new-object)))
+    (is (eq (injector fixture) (injector new-object)))))
 
 ;; TBD: thread-local scope & scope extensibility (export symbols)
