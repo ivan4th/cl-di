@@ -597,6 +597,7 @@
   (is-true (typep some-injected 'some-injected))
   (is-true (typep (another some-injected) 'injected-foobar))
   (is-true (typep another 'injected-foobar))
+  (is (eq fixture (obtain some-injected :fixture)))
   (dolist (new-object (list (build-instance :some-injected :whatever 42)
                             (build-instance 'some-injected :whatever 42)))
     (is-true (typep new-object 'some-injected))

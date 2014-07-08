@@ -16,7 +16,10 @@
 
 (defgeneric fixture-modules (fixture)
   (:documentation "Return a list of modules for injected fixture")
-  (:method append ((fixture injected-fixture)) '())
+  (:method append ((fixture injected-fixture))
+    (list
+     (declarative-bindings
+       (:fixture (:value fixture)))))
   (:method-combination append))
 
 (defmethod setup :after ((fixture injected-fixture))
